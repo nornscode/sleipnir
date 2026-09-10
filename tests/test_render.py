@@ -31,10 +31,15 @@ def test_message_and_event_lines():
     lines = message_lines({"role": "assistant", "content": "ok", "tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}]})
     assert lines == ["", "ok", "[cyan]⚙ bash[/] ls"]
     assert message_lines({"role": "tool", "name": "bash", "content": "exit code: 0\nfiles", "is_error": True})[0].startswith("  [red]↳[/]")
-    assert message_lines({"role": "tool", "name": "ask_human", "content": "yes"}) == ["[yellow]?[/] answered: yes"]
+    assert message_lines({"role": "tool", "name": "ask_human", "content": "yes"}) == ["", "[b green]›[/] yes"]
+    assert message_lines({"role": "assistant", "content": "", "tool_calls": [{"name": "ask_human", "arguments": {"question": "Allow rm? [p-1]"}}]}) == ["", "[yellow b]? Allow rm? \\[p-1][/]"]
+    assert message_lines({"role": "tool", "name": "bash", "content": "permission required (token p-1)\nbash: rm", "is_error": True}) == []
     assert message_lines({"role": "tool", "name": "wait", "kind": "timer_completed", "content": ""}) == ["  [dim]↳ timer_completed[/dim]"]
 
-    assert event_lines("waiting_for_user", {"question": "Allow rm?"})[1] == "[yellow b]? Allow rm?[/]"
+    assert event_lines("waiting_for_user", {"question": "Allow rm?"}) == ["", "[yellow b]? Allow rm?[/]"]
+    assert event_lines("llm_response", {"content": "", "tool_calls": [{"name": "ask_human", "arguments": {"question": "q"}}]}) == []
+    assert event_lines("tool_result", {"name": "ask_human", "content": "always"}) == ["", "[b green]›[/] always"]
+    assert event_lines("tool_result", {"name": "bash", "content": "permission required (token p-2)\nbash: ls", "is_error": True}) == []
     assert event_lines("completed", {"output": "done\nmore"}) == ["", "done\nmore", "", "[green]✓ done[/green]"]
     assert event_lines("completed", {"output": ""}) == ["", "[green]✓ done[/green]"]
     assert event_lines("error", {"error": "boom"}) == ["[red]✗ boom[/red]"]

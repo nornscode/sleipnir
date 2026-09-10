@@ -104,6 +104,10 @@ def tool_summary(name: str, arguments: Any) -> str:
     return text_of(args) if args else ""
 
 
+def permission_request(content: str) -> bool:
+    return content.startswith("permission required (token ")
+
+
 def first_line(text: str, width: int = 100) -> str:
     line = text.strip().splitlines()[0] if text.strip() else ""
     return line if len(line) <= width else line[: width - 1] + "…"
@@ -120,17 +124,38 @@ def message_lines(msg: dict) -> list[str]:
         return ["", f"[b green]›[/] {escape(content)}"]
     if role == "assistant":
         lines = ["", escape(content)] if content.strip() else []
-        for tc in msg.get("tool_calls") or []:
-            lines.append(f"[cyan]⚙ {escape(tc.get('name', '?'))}[/] {escape(tool_summary(tc.get('name', ''), tc.get('arguments')))}")
+        lines += tool_call_lines(msg.get("tool_calls") or [])
         return lines
     if role == "tool":
-        if msg.get("name") == "ask_human":
-            return [f"[yellow]?[/] answered: {escape(first_line(content))}"]
-        if kind:
-            return [f"  [dim]↳ {escape(kind)}[/dim]"]
-        marker = "[red]↳[/]" if msg.get("is_error") else "[dim]↳[/dim]"
-        return [f"  {marker} [dim]{escape(first_line(content))}[/dim]"]
+        return tool_result_lines(msg.get("name", ""), content, kind, bool(msg.get("is_error")))
     return [escape(content)] if content else []
+
+
+def tool_call_lines(tool_calls: list[dict]) -> list[str]:
+    """One line per tool call. A question to you is not a tool call as far
+    as the chat is concerned: it shows when it is asked (waiting_for_user)."""
+    lines = []
+    for tc in tool_calls:
+        name = tc.get("name", "?")
+        if name == "ask_human":
+            lines += ["", f"[yellow b]? {escape(tool_summary(name, tc.get('arguments')))}[/]"]
+        else:
+            lines.append(f"[cyan]⚙ {escape(name)}[/] {escape(tool_summary(name, tc.get('arguments')))}")
+    return lines
+
+
+def tool_result_lines(name: str, content: str, kind: str | None = None, is_error: bool = False) -> list[str]:
+    """One line per result. Your answer to a question shows as your turn;
+    a permission request shows as the question that follows it."""
+    if name == "ask_human":
+        return ["", f"[b green]›[/] {escape(first_line(content))}"]
+    if permission_request(content):
+        return []
+    if kind:
+        return [f"  [dim]↳ {escape(kind)}[/dim]"]
+    marker = "[red]↳[/]" if is_error else "[dim]↳[/dim]"
+    label = f"{escape(name)}: " if name else ""
+    return [f"  {marker} [dim]{label}{escape(first_line(content))}[/dim]"]
 
 
 def event_lines(event: str, payload: dict) -> list[str]:
@@ -142,17 +167,13 @@ def event_lines(event: str, payload: dict) -> list[str]:
         content = text_of(payload.get("content"))
         if content.strip():
             lines += ["", escape(content)]
-        for tc in payload.get("tool_calls") or []:
-            lines.append(f"[cyan]⚙ {escape(tc.get('name', '?'))}[/] {escape(tool_summary(tc.get('name', ''), tc.get('arguments')))}")
+        # The question itself arrives as waiting_for_user right after.
+        lines += tool_call_lines([tc for tc in payload.get("tool_calls") or [] if tc.get("name") != "ask_human"])
         return lines
     if event == "tool_result":
-        content = text_of(payload.get("content"))
-        if payload.get("name") == "ask_human":
-            return [f"[yellow]?[/] answered: {escape(first_line(content))}"]
-        marker = "[red]↳[/]" if payload.get("is_error") else "[dim]↳[/dim]"
-        return [f"  {marker} [dim]{escape(payload.get('name', ''))}: {escape(first_line(content))}[/dim]"]
+        return tool_result_lines(payload.get("name", ""), text_of(payload.get("content")), None, bool(payload.get("is_error")))
     if event == "waiting_for_user":
-        return ["", f"[yellow b]? {escape(text_of(payload.get('question')))}[/]", "[yellow]  type your answer below[/yellow]"]
+        return ["", f"[yellow b]? {escape(text_of(payload.get('question')))}[/]"]
     if event == "waiting_timer":
         return [f"[dim]◔ waiting {payload.get('seconds')}s[/dim]"]
     if event == "completed":

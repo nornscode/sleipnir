@@ -310,6 +310,7 @@ class SleipnirApp(App):
 
     async def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         await self._ensure_loaded(event.pane.id)
+        self._update_prompt()
 
     async def _ensure_loaded(self, pane_id: str | None) -> None:
         """A tab's history is fetched the first time it is shown."""
@@ -326,10 +327,12 @@ class SleipnirApp(App):
             self.log_lines(tab, message_lines(msg))
         run = full.get("run") or {}
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
+            # The question is the last thing in the history (the assistant's
+            # ask_human call); it stays pending in the prompt.
             tab.question = run["waiting_for"]["question"]
-            self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
         elif run.get("status") == "running":
             self.log_line(tab, "[dim]— run in progress; attached —[/dim]")
+        self._update_prompt()
 
     async def open_session(self, session: dict, *, replay: bool = True) -> None:
         """Show a session: switch to its space if needed, activate its tab."""
@@ -356,6 +359,16 @@ class SleipnirApp(App):
     def active_tab(self) -> Tab | None:
         return self.tabs.get(self.query_one("#tabs", TabbedContent).active or "")
 
+    def _update_prompt(self) -> None:
+        tab = self.active_tab()
+        prompt = self.query_one("#prompt", Input)
+        if tab and tab.question:
+            prompt.placeholder = "answer: yes / always / no, or say more"
+        elif tab is None or tab.session_id == 0:
+            prompt.placeholder = "type to start a new session, or /help"
+        else:
+            prompt.placeholder = "message the agent, or /help"
+
     # -- live events -------------------------------------------------------
 
     async def on_agent_event(self, agent_id: int, event: str, payload: dict) -> None:
@@ -376,6 +389,7 @@ class SleipnirApp(App):
                 payload = {**payload, "output": ""}
         if tab.loaded:
             self.log_lines(tab, event_lines(event, payload))
+        self._update_prompt()
         if event in ("completed", "error", "waiting_for_user", "agent_started"):
             self.refresh_sessions()
 
@@ -396,8 +410,8 @@ class SleipnirApp(App):
         if tab.question and tab.run_id:
             try:
                 await self.api.reply(tab.run_id, text)
-                self.log_lines(tab, ["", f"[b green]›[/] {text}"])
                 tab.question = None
+                self._update_prompt()
             except ApiError as e:
                 self.log_line(tab, f"[red]{e.message}[/red]")
             return

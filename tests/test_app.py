@@ -101,7 +101,8 @@ async def test_spaces_tabs_send_reply_and_fork():
         assert app.stream.joined == [5]
         assert app.tabs["s2"].question == "Allow bash `rm`?"
         log2 = app.query_one("#log-2", RichLog)
-        assert "add a flag" in log_text(log2) and "Allow bash" in log_text(log2)
+        assert "add a flag" in log_text(log2)
+        assert app.query_one("#prompt", Input).placeholder.startswith("answer:")
 
         # The parked session: the next line answers the question.
         prompt = app.query_one("#prompt", Input)
@@ -110,6 +111,7 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause()
         assert api.calls[-1] == ("reply", 12, "always")
         assert app.tabs["s2"].question is None
+        assert app.query_one("#prompt", Input).placeholder.startswith("message")
 
         # Switch tab, type: the message goes to that session on this space's gard.
         tabs.active = "s1"

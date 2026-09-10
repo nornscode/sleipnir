@@ -17,6 +17,8 @@ that carries a rider between worlds.
 uv tool install sleipnir        # or: uv sync, inside a clone
 ```
 
+That installs `sleip`, and `sleipnir` as an alias.
+
 ## Run
 
 From the repository you want the agent to work in:
@@ -25,7 +27,7 @@ From the repository you want the agent to work in:
 export NORNS_URL=http://localhost:4000
 export NORNS_API_KEY=nrn_...
 export ANTHROPIC_API_KEY=sk-ant-...
-sleipnir
+sleip
 ```
 
 That opens the session client with this repository's worker running in
@@ -48,12 +50,12 @@ the same history and state are there. Only the working tree is local,
 so a session's tool calls always run on the machine whose worker
 started it.
 
-The pieces run alone too: `sleipnir serve` is the worker without a
-client, for a machine you are not sitting at, and `sleipnir chat` is
+The pieces run alone too: `sleip serve` is the worker without a
+client, for a machine you are not sitting at, and `sleip chat` is
 the client without a worker.
 
 Options: `--root` (repository root, default the current directory),
-`--agent` (default `sleipnir`), `--model` (default `claude-sonnet-5`),
+`--agent` (default `sleipnir`, the agent's name in Norns), `--model` (default `claude-sonnet-5`),
 `--max-steps` (default 200), `--compact-at` (default 100000) and
 `--keep` (default 40). Every option is also a `SLEIPNIR_<NAME>`
 environment variable or a `.sleipnir/config` setting.
@@ -102,14 +104,14 @@ rules.
 
 ## Configuring it, from inside it
 
-`sleipnir` is also the configuration tool, and the agent can run it
+`sleip` is also the configuration tool, and the agent can run it
 through `bash`:
 
 ```bash
-sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
-sleipnir config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
-sleipnir doctor      # connection, keys, gard, allow list
-sleipnir docs        # the reference the agent reads
+sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
+sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
+sleip doctor      # connection, keys, gard, allow list
+sleip docs        # the reference the agent reads
 ```
 
 Settings live in `.sleipnir/config` and take effect when the worker
@@ -123,7 +125,7 @@ picks up edits to the allow file as they happen.
 
 The system prompt tells the agent to read `AGENTS.md` (or `CLAUDE.md`)
 at the root before starting, so project conventions live with the
-project, and points it at `sleipnir docs` for the harness itself.
+project, and points it at `sleip docs` for the harness itself.
 
 ## Limits
 

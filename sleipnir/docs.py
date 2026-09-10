@@ -1,4 +1,4 @@
-"""The AI-facing reference, printed by `sleipnir docs`."""
+"""The AI-facing reference, printed by `sleip docs`."""
 
 DOCS = """# Sleipnir reference
 
@@ -52,20 +52,20 @@ and each must match a rule. A command with a backtick always asks.
     write_file docs/*
 
 Changes to the allow list or to .sleipnir/ always ask, whatever the
-list says. To add a rule, run `sleipnir allow add <tool> <pattern>`
+list says. To add a rule, run `sleip allow add <tool> <pattern>`
 through bash and expect a permission request.
 
 ## Configuring the harness
 
 Run these through bash from the repository root:
 
-- sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
-- sleipnir config show | set <key> <value> | unset <key>
+- sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
+- sleip config show | set <key> <value> | unset <key>
   keys: agent (name in Norns), model, max_steps, compact_at (input
   tokens at which the history is folded into a summary), keep (messages
   kept verbatim after that)
-- sleipnir doctor: checks the connection, keys, and config
-- sleipnir docs: this text
+- sleip doctor: checks the connection, keys, and config
+- sleip docs: this text
 
 Config lives in .sleipnir/config and takes effect when the worker
 restarts. A flag or SLEIPNIR_<KEY> in the environment overrides it.

@@ -28,6 +28,7 @@ READ_ONLY = {"read_file", "grep", "glob"}
 # Actions no rule can cover: reconfiguring the harness itself.
 HARNESS_DIR = ".sleipnir"
 SELF_CONFIG_SUBCOMMANDS = {"allow", "config"}
+COMMAND_NAMES = {"sleip", "sleipnir"}
 MUTATING = {"bash", "write_file", "edit_file"}
 
 TOKEN_RE = re.compile(r"\bp-[0-9a-f]{6}\b")
@@ -106,7 +107,7 @@ def always_asks(tool: str, subject: str) -> bool:
     if tool == "bash":
         for seg in shell_segments(subject):
             words = seg.split()
-            if len(words) >= 2 and words[0] == "sleipnir" and words[1] in SELF_CONFIG_SUBCOMMANDS:
+            if len(words) >= 2 and words[0] in COMMAND_NAMES and words[1] in SELF_CONFIG_SUBCOMMANDS:
                 return True
         return False
     return subject == HARNESS_DIR or subject.startswith(HARNESS_DIR + "/")
@@ -173,7 +174,7 @@ class Permissions:
                     self.rules.append(rule)
 
     def _refresh(self) -> None:
-        """Pick up edits made outside this process (`sleipnir allow add`)."""
+        """Pick up edits made outside this process (`sleip allow add`)."""
         if not self.allow_file:
             return
         mtime = self.allow_file.stat().st_mtime_ns if self.allow_file.is_file() else None

@@ -49,15 +49,16 @@ def test_docs_and_doctor(tmp_path, capsys, monkeypatch):
 
 
 def test_self_configuration_always_asks(ws, allow):
-    allow("bash sleipnir *", "bash git *", "bash true", "write_file *", "edit_file *")
-    assert always_asks("bash", "git status && sleipnir allow add bash 'rm *'")
-    assert not always_asks("bash", "sleipnir docs")
+    allow("bash sleip *", "bash git *", "bash true", "write_file *", "edit_file *")
+    assert always_asks("bash", "git status && sleip allow add bash 'rm *'")
+    assert not always_asks("bash", "sleip docs")
+    assert always_asks("bash", "sleipnir allow add bash x")
     assert always_asks("write_file", ".sleipnir/allow")
     with pytest.raises(PermissionRequired):
-        bash.handler("sleipnir allow add bash 'rm *'")
+        bash.handler("sleip allow add bash 'rm *'")
     with pytest.raises(PermissionRequired):
         write_file.handler(".sleipnir/allow", "bash rm *")
-    assert bash.handler("sleipnir docs 2>/dev/null; true").startswith("exit code: 0")
+    assert bash.handler("sleip docs 2>/dev/null; true").startswith("exit code: 0")
 
 
 def test_always_never_adds_a_self_config_rule(tmp_path):
@@ -65,10 +66,10 @@ def test_always_never_adds_a_self_config_rule(tmp_path):
 
     p = Permissions(tmp_path / "allow")
     with pytest.raises(PermissionRequired):
-        p.check("bash", "sleipnir config set model x")
+        p.check("bash", "sleip config set model x")
     token = next(iter(p.pending))
-    p.observe(_messages(token, "always", subject="sleipnir config set model x"))
-    p.check("bash", "sleipnir config set model x", approval=token)
+    p.observe(_messages(token, "always", subject="sleip config set model x"))
+    p.check("bash", "sleip config set model x", approval=token)
     assert p.rules == []
 
 

@@ -1,12 +1,12 @@
-"""`sleipnir`: the session client with your worker, or the pieces alone.
+"""`sleip` (also `sleipnir`): the session client with your worker, or the pieces alone.
 
-    sleipnir [run] [--root DIR] [--agent NAME] [--model M] [--max-steps N]   client + worker
-    sleipnir serve ...                                                        worker only, headless
-    sleipnir chat ...                                                         client only
-    sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
-    sleipnir config show | set <key> <value> | unset <key>
-    sleipnir doctor
-    sleipnir docs
+    sleip [run] [--root DIR] [--agent NAME] [--model M] [--max-steps N]   client + worker
+    sleip serve ...                                                        worker only, headless
+    sleip chat ...                                                         client only
+    sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
+    sleip config show | set <key> <value> | unset <key>
+    sleip doctor
+    sleip docs
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs"}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="sleipnir", description="Coding harness worker for Norns")
+    parser = argparse.ArgumentParser(prog="sleip", description="Sleipnir: the coding harness for Norns")
     parser.add_argument("--version", action="version", version=f"sleipnir {__version__}")
     parser.add_argument("--root", default=".", help="repository root (default: current directory)")
     sub = parser.add_subparsers(dest="command")
@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    # `sleipnir` and `sleipnir --agent x` mean `run`; --root may come anywhere.
+    # `sleip` and `sleip --agent x` mean `run`; --root may come anywhere.
     if not any(a in SUBCOMMANDS for a in argv) and not any(a in ("-h", "--help", "--version") for a in argv):
         root_args: list[str] = []
         if "--root" in argv:

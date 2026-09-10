@@ -36,8 +36,10 @@ nornsctl agents send sleipnir "Add a --json flag to the list command"
 ```
 
 Options: `--root` (repository root, default the current directory),
-`--model` (default `claude-sonnet-5`), `--max-steps` (default 200).
-Environment: `SLEIPNIR_AGENT`, `SLEIPNIR_MODEL`, `SLEIPNIR_MAX_STEPS`.
+`--model` (default `claude-sonnet-5`), `--max-steps` (default 200),
+`--compact-at` (default 100000) and `--keep` (default 40). Every option
+is also a `SLEIPNIR_<NAME>` environment variable or a `.sleipnir/config`
+setting.
 
 ### Pin it to a gard
 
@@ -92,7 +94,7 @@ through `bash`:
 
 ```bash
 sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
-sleipnir config show | set <key> <value> | unset <key>   # agent, model, max_steps
+sleipnir config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
 sleipnir doctor      # connection, keys, gard, allow list
 sleipnir docs        # the reference the agent reads
 ```
@@ -117,10 +119,11 @@ project, and points it at `sleipnir docs` for the harness itself.
 - `bash` output is truncated in the middle above 30k characters, and
   commands are killed after the timeout (default 120s, max 600s). The
   worker's own credentials are removed from the command's environment.
-- The Norns SDK trims tool results older than the last two messages
-  to 200 characters. That keeps long sessions under the context window
-  until compaction lands in Norns; the agent re-reads a file when it
-  needs it again.
+- Long sessions are compacted by Norns, not trimmed: once a response
+  reports `compact_at` input tokens, everything but the last `keep`
+  messages is folded into a summary that this worker writes and Norns
+  carries forward. The summary and the fold are in the run log as a
+  `context_compacted` event.
 - `grep` is a Python walk, not ripgrep. It skips build directories and
   binary files and is fine for repositories of tens of thousands of files.
 

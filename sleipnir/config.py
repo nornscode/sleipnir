@@ -15,6 +15,10 @@ DEFAULTS = {
     "agent": "sleipnir",
     "model": "claude-sonnet-5",
     "max_steps": "200",
+    # Compaction: fold older history into a summary once a response reports
+    # compact_at input tokens, keeping the last `keep` messages.
+    "compact_at": "100000",
+    "keep": "40",
 }
 KEYS = tuple(DEFAULTS)
 
@@ -45,8 +49,8 @@ def save(root: Path, values: dict[str, str]) -> None:
 def set_value(root: Path, key: str, value: str) -> None:
     if key not in KEYS:
         raise KeyError(f"unknown setting {key!r}; settings are: {', '.join(KEYS)}")
-    if key == "max_steps" and not value.isdigit():
-        raise ValueError("max_steps must be a positive integer")
+    if key in ("max_steps", "compact_at", "keep") and not (value.isdigit() and int(value) > 0):
+        raise ValueError(f"{key} must be a positive integer")
     values = load(root)
     values[key] = value
     save(root, values)

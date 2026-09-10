@@ -27,7 +27,7 @@ class Harness(Norns):
         return await super()._handle_llm_task(task)
 
 
-def build_agent(name: str, model: str, max_steps: int) -> Agent:
+def build_agent(name: str, model: str, max_steps: int, compact_at: int, keep: int) -> Agent:
     return Agent(
         name=name,
         model=model,
@@ -35,10 +35,11 @@ def build_agent(name: str, model: str, max_steps: int) -> Agent:
         tools=all_tools,
         mode="conversation",
         checkpoint_policy="on_tool_call",
-        # A coding session is one long tool loop; the window must outlast
-        # max_steps (up to three messages per step) or the task itself is
-        # evicted partway through. Compaction (H2) replaces this.
-        context_window=max_steps * 3,
+        # A coding session is one long tool loop. No sliding window: Norns
+        # compacts the history into a summary once a response reports
+        # compact_at input tokens, and this worker writes the summary.
+        context_strategy="none",
+        context_policy={"compact_at": compact_at, "keep": keep},
         max_steps=max_steps,
     )
 
@@ -47,10 +48,18 @@ def run_worker(root: Path, settings: dict[str, str]) -> None:
     runtime.configure(root)
     perms = runtime.permissions()
     logger.info(f"workspace {root}; {len(perms.rules)} allow rules from {perms.allow_file}")
-    logger.info(f"agent {settings['agent']}, model {settings['model']}, max_steps {settings['max_steps']}")
+    logger.info(
+        f"agent {settings['agent']}, model {settings['model']}, max_steps {settings['max_steps']}, "
+        f"compact at {settings['compact_at']} tokens keeping {settings['keep']} messages"
+    )
 
     url = os.environ.get("NORNS_URL", "http://localhost:4000")
     harness = Harness(url, api_key=os.environ.get("NORNS_API_KEY"))
     # Worker identity and gard binding come from the environment
     # (NORNS_WORKER_ID, NORNS_GARD, NORNS_GARD_CLAIM_TOKEN).
-    harness.run(build_agent(settings["agent"], settings["model"], int(settings["max_steps"])))
+    harness.run(
+        build_agent(
+            settings["agent"], settings["model"], int(settings["max_steps"]),
+            int(settings["compact_at"]), int(settings["keep"]),
+        )
+    )

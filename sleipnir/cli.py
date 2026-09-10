@@ -33,6 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--agent", help="agent name in Norns")
     run.add_argument("--model")
     run.add_argument("--max-steps", type=int)
+    run.add_argument("--compact-at", type=int, help="input tokens at which Norns compacts the history")
+    run.add_argument("--keep", type=int, help="messages kept verbatim after a compaction")
 
     allow = sub.add_parser("allow", help="manage the allow list (.sleipnir/allow)")
     allow_sub = allow.add_subparsers(dest="action", required=True)
@@ -76,7 +78,13 @@ def main(argv: list[str] | None = None) -> int:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         settings = config.resolve(
             root,
-            {"agent": args.agent, "model": args.model, "max_steps": str(args.max_steps) if args.max_steps else None},
+            {
+                "agent": args.agent,
+                "model": args.model,
+                "max_steps": str(args.max_steps) if args.max_steps else None,
+                "compact_at": str(args.compact_at) if args.compact_at else None,
+                "keep": str(args.keep) if args.keep else None,
+            },
         )
         from sleipnir.worker import run_worker
 

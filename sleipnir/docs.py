@@ -61,7 +61,9 @@ Run these through bash from the repository root:
 
 - sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
 - sleipnir config show | set <key> <value> | unset <key>
-  keys: agent (name in Norns), model, max_steps
+  keys: agent (name in Norns), model, max_steps, compact_at (input
+  tokens at which the history is folded into a summary), keep (messages
+  kept verbatim after that)
 - sleipnir doctor: checks the connection, keys, and config
 - sleipnir docs: this text
 

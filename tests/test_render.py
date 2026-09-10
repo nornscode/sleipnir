@@ -54,3 +54,19 @@ def test_space_label():
     label = space_label("laptop", [{"status": "awaiting_llm"}, {"status": "idle", "run": {"status": "waiting"}}])
     assert "●" in label and "laptop" in label and "2 sessions · 1 working · 1 need you" in label
     assert "○" in space_label("empty", [])
+
+
+def test_permission_prompt_from_the_workers_request():
+    from sleipnir.render import expand_answer, permission_details, question_lines
+
+    request = "permission required (token p-372a2a)\nbash: ls -la\n\nThis action is not in the allow list."
+    assert permission_details(request) == ("p-372a2a", "bash", "ls -la")
+    known = {"p-372a2a": ("bash", "ls -la")}
+    lines = question_lines("Allow bash `ls -la`? (yes / always / no) [p-372a2a]", known)
+    assert lines[1] == "[yellow b]⚠ bash wants to run[/]" and lines[2] == "[yellow]    ls -la[/]"
+    assert not any("p-372a2a" in l for l in lines)
+    # The model's wording alone is enough when the request was not seen.
+    assert question_lines("Allow edit_file `calc.py`? (yes / always / no) [p-000000]")[1] == "[yellow b]⚠ edit_file wants to run[/]"
+    # A free-form question stays a question.
+    assert question_lines("Which branch should I use?") == ["", "[yellow b]? Which branch should I use?[/]"]
+    assert expand_answer("a") == "always" and expand_answer("Y") == "yes" and expand_answer("use main") == "use main"

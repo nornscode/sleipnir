@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import re
+
 from rich.markup import escape
 
 STATUS_GLYPH = {
@@ -104,8 +106,49 @@ def tool_summary(name: str, arguments: Any) -> str:
     return text_of(args) if args else ""
 
 
+PERMISSION_RE = re.compile(r"\Apermission required \(token (p-[0-9a-f]{6})\)\n(\w+): (.*?)(?:\n\n|\Z)", re.DOTALL)
+TOKEN_RE = re.compile(r"\bp-[0-9a-f]{6}\b")
+QUESTION_RE = re.compile(r"[Aa]llow (\w+) `(.+?)`\?")
+ANSWER_SHORTCUTS = {"y": "yes", "a": "always", "n": "no"}
+
+
 def permission_request(content: str) -> bool:
     return content.startswith("permission required (token ")
+
+
+def permission_details(content: str) -> tuple[str, str, str] | None:
+    """(token, tool, subject) from the worker's own permission request."""
+    m = PERMISSION_RE.match(content)
+    return (m.group(1), m.group(2), m.group(3)) if m else None
+
+
+def permission_in_question(question: str, known: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    """The action a question is about: from the worker's request whose
+    token the question quotes, else from the question's own wording."""
+    for token in TOKEN_RE.findall(question):
+        if token in known:
+            return known[token]
+    m = QUESTION_RE.search(question)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def question_lines(question: str, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
+    """A question to you. A permission request renders as one, without
+    the token the worker and the model pass between themselves."""
+    action = permission_in_question(question, known or {})
+    if action is None:
+        return ["", f"[yellow b]? {escape(question)}[/]"]
+    tool, subject = action
+    lines = ["", f"[yellow b]⚠ {escape(tool)} wants to run[/]"]
+    lines += [f"[yellow]    {escape(line)}[/]" for line in subject.splitlines()[:8]]
+    if len(subject.splitlines()) > 8:
+        lines.append("[yellow]    …[/]")
+    lines.append("[dim]  y allow once · a always allow · n deny · or type a reply[/dim]")
+    return lines
+
+
+def expand_answer(text: str) -> str:
+    return ANSWER_SHORTCUTS.get(text.strip().lower(), text)
 
 
 def first_line(text: str, width: int = 100) -> str:
@@ -113,8 +156,9 @@ def first_line(text: str, width: int = 100) -> str:
     return line if len(line) <= width else line[: width - 1] + "…"
 
 
-def message_lines(msg: dict) -> list[str]:
-    """A stored message as chat lines, Rich markup."""
+def message_lines(msg: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
+    """A stored message as chat lines, Rich markup. `known` maps permission
+    tokens to (tool, subject), learned from earlier tool results."""
     role = msg.get("role")
     content = text_of(msg.get("content"))
     kind = msg.get("kind")
@@ -124,21 +168,21 @@ def message_lines(msg: dict) -> list[str]:
         return ["", f"[b green]›[/] {escape(content)}"]
     if role == "assistant":
         lines = ["", escape(content)] if content.strip() else []
-        lines += tool_call_lines(msg.get("tool_calls") or [])
+        lines += tool_call_lines(msg.get("tool_calls") or [], known)
         return lines
     if role == "tool":
         return tool_result_lines(msg.get("name", ""), content, kind, bool(msg.get("is_error")))
     return [escape(content)] if content else []
 
 
-def tool_call_lines(tool_calls: list[dict]) -> list[str]:
+def tool_call_lines(tool_calls: list[dict], known: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """One line per tool call. A question to you is not a tool call as far
     as the chat is concerned: it shows when it is asked (waiting_for_user)."""
     lines = []
     for tc in tool_calls:
         name = tc.get("name", "?")
         if name == "ask_human":
-            lines += ["", f"[yellow b]? {escape(tool_summary(name, tc.get('arguments')))}[/]"]
+            lines += question_lines(tool_summary(name, tc.get("arguments")), known)
         else:
             lines.append(f"[cyan]⚙ {escape(name)}[/] {escape(tool_summary(name, tc.get('arguments')))}")
     return lines
@@ -158,7 +202,7 @@ def tool_result_lines(name: str, content: str, kind: str | None = None, is_error
     return [f"  {marker} [dim]{label}{escape(first_line(content))}[/dim]"]
 
 
-def event_lines(event: str, payload: dict) -> list[str]:
+def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """A live channel event as chat lines, Rich markup."""
     if event == "agent_started":
         return [f"[dim]— run {payload.get('run_id')} started —[/dim]"]
@@ -173,7 +217,7 @@ def event_lines(event: str, payload: dict) -> list[str]:
     if event == "tool_result":
         return tool_result_lines(payload.get("name", ""), text_of(payload.get("content")), None, bool(payload.get("is_error")))
     if event == "waiting_for_user":
-        return ["", f"[yellow b]? {escape(text_of(payload.get('question')))}[/]"]
+        return question_lines(text_of(payload.get("question")), known)
     if event == "waiting_timer":
         return [f"[dim]◔ waiting {payload.get('seconds')}s[/dim]"]
     if event == "completed":

@@ -21,7 +21,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
-from sleipnir.render import event_lines, message_lines, space_label, text_of, title_of
+from sleipnir.render import event_lines, expand_answer, message_lines, permission_details, space_label, text_of, title_of
 from sleipnir.stream import AgentStream
 
 logger = logging.getLogger("sleipnir.app")
@@ -54,6 +54,8 @@ class Tab:
     last_assistant: str = ""
     title: str = ""
     loaded: bool = False
+    # Permission requests seen in this session: token -> (tool, subject).
+    permissions: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -300,7 +302,7 @@ class SleipnirApp(App):
                 if tab.question != run["waiting_for"]["question"]:
                     tab.question = run["waiting_for"]["question"]
                     if tab.loaded:
-                        self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
+                        self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}, tab.permissions))
             elif run.get("status") != "waiting":
                 tab.question = None
 
@@ -324,15 +326,21 @@ class SleipnirApp(App):
             self.log_line(tab, f"[red]could not load session: {e}[/red]")
             return
         for msg in full.get("messages") or []:
-            self.log_lines(tab, message_lines(msg))
+            self._learn_permission(tab, msg.get("name"), msg.get("content"))
+            self.log_lines(tab, message_lines(msg, tab.permissions))
         run = full.get("run") or {}
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
             # The question is the last thing in the history (the assistant's
             # ask_human call); it stays pending in the prompt.
             tab.question = run["waiting_for"]["question"]
-        elif run.get("status") == "running":
-            self.log_line(tab, "[dim]— run in progress; attached —[/dim]")
         self._update_prompt()
+
+    def _learn_permission(self, tab: Tab, name, content) -> None:
+        if name in ("bash", "write_file", "edit_file") and isinstance(content, str):
+            details = permission_details(content)
+            if details:
+                token, tool, subject = details
+                tab.permissions[token] = (tool, subject)
 
     async def open_session(self, session: dict, *, replay: bool = True) -> None:
         """Show a session: switch to its space if needed, activate its tab."""
@@ -363,7 +371,7 @@ class SleipnirApp(App):
         tab = self.active_tab()
         prompt = self.query_one("#prompt", Input)
         if tab and tab.question:
-            prompt.placeholder = "answer: yes / always / no, or say more"
+            prompt.placeholder = "y / a / n, or type a reply"
         elif tab is None or tab.session_id == 0:
             prompt.placeholder = "type to start a new session, or /help"
         else:
@@ -377,6 +385,8 @@ class SleipnirApp(App):
         if tab is None:
             self.refresh_sessions()
             return
+        if event == "tool_result":
+            self._learn_permission(tab, payload.get("name"), text_of(payload.get("content")))
         if event == "waiting_for_user":
             tab.question = payload.get("question")
         elif event in ("completed", "error") or (event == "tool_result" and payload.get("name") == "ask_human"):
@@ -388,7 +398,7 @@ class SleipnirApp(App):
             if output and output == tab.last_assistant:
                 payload = {**payload, "output": ""}
         if tab.loaded:
-            self.log_lines(tab, event_lines(event, payload))
+            self.log_lines(tab, event_lines(event, payload, tab.permissions))
         self._update_prompt()
         if event in ("completed", "error", "waiting_for_user", "agent_started"):
             self.refresh_sessions()
@@ -409,7 +419,7 @@ class SleipnirApp(App):
             return
         if tab.question and tab.run_id:
             try:
-                await self.api.reply(tab.run_id, text)
+                await self.api.reply(tab.run_id, expand_answer(text))
                 tab.question = None
                 self._update_prompt()
             except ApiError as e:

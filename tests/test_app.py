@@ -29,7 +29,15 @@ class FakeApi:
 
     async def session(self, session_id):
         s = next(s for s in self.session_list if s["id"] == session_id)
-        return {**s, "messages": [{"role": "user", "content": s["first_message"]}, {"role": "assistant", "content": "on it"}]}
+        messages = [{"role": "user", "content": s["first_message"]}, {"role": "assistant", "content": "on it"}]
+        if session_id == 2:
+            messages += [
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "name": "bash", "arguments": {"command": "rm -rf build"}}]},
+                {"role": "tool", "tool_call_id": "c1", "name": "bash", "is_error": True,
+                 "content": "permission required (token p-ab12cd)\nbash: rm -rf build\n\nAsk the user."},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c2", "name": "ask_human", "arguments": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}}]},
+            ]
+        return {**s, "messages": messages}
 
     async def agents(self):
         return [{"id": 5, "name": "sleipnir"}, {"id": 8, "name": "my-agent"}]
@@ -102,11 +110,14 @@ async def test_spaces_tabs_send_reply_and_fork():
         assert app.tabs["s2"].question == "Allow bash `rm`?"
         log2 = app.query_one("#log-2", RichLog)
         assert "add a flag" in log_text(log2)
-        assert app.query_one("#prompt", Input).placeholder.startswith("answer:")
+        # The permission request renders as a prompt, without the token.
+        assert "bash wants to run" in log_text(log2) and "rm -rf build" in log_text(log2)
+        assert "p-ab12cd" not in log_text(log2)
+        assert app.query_one("#prompt", Input).placeholder.startswith("y / a / n")
 
         # The parked session: the next line answers the question.
         prompt = app.query_one("#prompt", Input)
-        prompt.value = "always"
+        prompt.value = "a"
         await prompt.action_submit()
         await pilot.pause()
         assert api.calls[-1] == ("reply", 12, "always")

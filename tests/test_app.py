@@ -51,6 +51,10 @@ class FakeApi:
     async def run(self, run_id):
         return {"id": run_id, "conversation_id": 1}
 
+    async def delete_session(self, agent_id, key):
+        self.calls.append(("delete", agent_id, key))
+        self.session_list = [s for s in self.session_list if s["key"] != key]
+
     async def close(self):
         pass
 
@@ -142,6 +146,14 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause(0.3)
         assert [p.id for p in tabs.query("TabPane")] == ["s7"]
         assert 8 in app.stream.joined
+
+        # /delete asks once, then removes the session from Norns and the tabs.
+        await app.command("/delete")
+        assert not any(c[0] == "delete" for c in api.calls)
+        await app.command("/delete")
+        await pilot.pause(0.3)
+        assert ("delete", 8, "run_7") in api.calls
+        assert "s7" not in app.tabs and 7 not in app.sessions
 
 
 @pytest.mark.asyncio

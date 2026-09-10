@@ -4,6 +4,7 @@ from sleipnir.render import event_lines, message_lines, session_label, text_of, 
 def test_title_and_text():
     assert title_of({"first_message": "Fix the tests\nplease", "key": "k"}) == "Fix the tests"
     assert title_of({"first_message": None, "key": "sleipnir-1"}) == "sleipnir-1"
+    assert title_of({"first_message": None, "summary": "Task: fix add\nmore", "key": "k"}) == "Task: fix add"
     assert title_of({"first_message": "x" * 60}).endswith("…")
     assert text_of({"$enc": "v1"}) == "[encrypted]"
     assert text_of({"a": 1}) == '{"a": 1}'

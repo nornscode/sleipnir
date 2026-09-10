@@ -80,6 +80,9 @@ class NornsApi:
     async def run_events(self, run_id: int) -> list[dict]:
         return await self._request("GET", f"/runs/{run_id}/events")
 
+    async def delete_session(self, agent_id: int, key: str) -> None:
+        await self._request("DELETE", f"/agents/{agent_id}/conversations/{key}")
+
     async def gards(self) -> list[dict]:
         return await self._request("GET", "/gards")
 

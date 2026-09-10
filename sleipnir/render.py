@@ -46,7 +46,11 @@ def text_of(content: Any) -> str:
 
 
 def title_of(session: dict) -> str:
+    """The first user turn; after a compaction has folded it away, the
+    summary's first line; failing both, the key."""
     first = text_of(session.get("first_message")).strip().splitlines()
+    if not first:
+        first = text_of(session.get("summary")).strip().splitlines()
     title = first[0] if first else session.get("key") or f"session {session.get('id')}"
     return title if len(title) <= 48 else title[:47] + "…"
 

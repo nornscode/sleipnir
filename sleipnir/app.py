@@ -35,6 +35,7 @@ Type to talk to the session you are in; when the agent asks a question, your nex
   /fork N [message] fork the current session from step N into a new one
   /resume           reload the current session and re-attach to its run
   /close            close the current tab (ctrl+w); the session lives on
+  /delete           delete the current session from Norns (asks once)
   /help             this text
   /quit             leave (the worker stops with you; sessions live on in Norns)
 
@@ -128,6 +129,7 @@ class SleipnirApp(App):
         self.agent_id: int | None = None
         self._pending_key: str | None = None
         self._pending_text: str | None = None
+        self._delete_armed: tuple[str, float] | None = None
 
     # -- layout -------------------------------------------------------------
 
@@ -472,6 +474,8 @@ class SleipnirApp(App):
             await self.resume(tab)
         elif cmd == "/close":
             await self.close_active_tab()
+        elif cmd == "/delete":
+            await self.delete_active_session()
         elif cmd == "/fork":
             if tab is None or tab.run_id is None:
                 self.notify("open a session with a run first", severity="warning")
@@ -495,6 +499,33 @@ class SleipnirApp(App):
             self.refresh_sessions()
         else:
             self.notify(f"unknown command {cmd}; try /help", severity="warning")
+
+    async def delete_active_session(self) -> None:
+        """Two /delete within ten seconds remove the session from Norns."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        pane_id = tabs.active
+        tab = self.tabs.get(pane_id or "")
+        if tab is None or tab.session_id == 0:
+            self.notify("no session to delete", severity="warning")
+            return
+        armed = self._delete_armed
+        if not armed or armed[0] != pane_id or time.monotonic() - armed[1] > 10:
+            self._delete_armed = (pane_id, time.monotonic())
+            self.notify(f"delete “{tab.title}” from Norns? type /delete again to confirm", severity="warning")
+            return
+        self._delete_armed = None
+        try:
+            await self.api.delete_session(tab.agent_id, tab.key)
+        except ApiError as e:
+            self.notify(e.message, severity="error")
+            return
+        self.sessions.pop(tab.session_id, None)
+        self.tabs.pop(pane_id, None)
+        await tabs.remove_pane(pane_id)
+        self.spaces = self._group_spaces(list(self.sessions.values()))
+        await self._render_sidebar()
+        self.notify(f"deleted “{tab.title}”")
+        self.refresh_sessions()
 
     async def resume(self, tab: Tab) -> None:
         pane_id = f"s{tab.session_id}"

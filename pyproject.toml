@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sleipnir = "sleipnir.worker:main"
+sleipnir = "sleipnir.cli:main"
 
 [dependency-groups]
 dev = [

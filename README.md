@@ -85,11 +85,30 @@ model, so the model cannot approve on your behalf. `.sleipnir/` is
 per-repository; add it to `.gitignore` or commit it to share a team's
 rules.
 
+## Configuring it, from inside it
+
+`sleipnir` is also the configuration tool, and the agent can run it
+through `bash`:
+
+```bash
+sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
+sleipnir config show | set <key> <value> | unset <key>   # agent, model, max_steps
+sleipnir doctor      # connection, keys, gard, allow list
+sleipnir docs        # the reference the agent reads
+```
+
+Settings live in `.sleipnir/config` and take effect when the worker
+restarts. A flag (`sleipnir --model ...`) or `SLEIPNIR_<KEY>` in the
+environment overrides the file. Changes to the allow list or to
+`.sleipnir/` always ask for permission, whatever the list says, so the
+agent cannot grant itself permissions with one "always". The worker
+picks up edits to the allow file as they happen.
+
 ## Prompts
 
 The system prompt tells the agent to read `AGENTS.md` (or `CLAUDE.md`)
 at the root before starting, so project conventions live with the
-project. There is no other configuration.
+project, and points it at `sleipnir docs` for the harness itself.
 
 ## Limits
 

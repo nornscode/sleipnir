@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 import logging
 import os
 from pathlib import Path
 
 from norns import Agent, Norns
 
-from sleipnir import __version__, runtime
+from sleipnir import runtime
 from sleipnir.prompt import SYSTEM_PROMPT
 from sleipnir.tools import all_tools
 
@@ -44,30 +43,14 @@ def build_agent(name: str, model: str, max_steps: int) -> Agent:
     )
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="sleipnir", description="Coding harness worker for Norns")
-    parser.add_argument("--root", default=".", help="repository root (default: current directory)")
-    parser.add_argument("--agent", default=os.environ.get("SLEIPNIR_AGENT", "sleipnir"), help="agent name")
-    parser.add_argument("--model", default=os.environ.get("SLEIPNIR_MODEL", "claude-sonnet-5"))
-    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("SLEIPNIR_MAX_STEPS", "200")))
-    parser.add_argument("--version", action="version", version=f"sleipnir {__version__}")
-    args = parser.parse_args(argv)
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-
-    root = Path(args.root).resolve()
-    if not root.is_dir():
-        parser.error(f"{root} is not a directory")
+def run_worker(root: Path, settings: dict[str, str]) -> None:
     runtime.configure(root)
     perms = runtime.permissions()
     logger.info(f"workspace {root}; {len(perms.rules)} allow rules from {perms.allow_file}")
+    logger.info(f"agent {settings['agent']}, model {settings['model']}, max_steps {settings['max_steps']}")
 
     url = os.environ.get("NORNS_URL", "http://localhost:4000")
     harness = Harness(url, api_key=os.environ.get("NORNS_API_KEY"))
     # Worker identity and gard binding come from the environment
     # (NORNS_WORKER_ID, NORNS_GARD, NORNS_GARD_CLAIM_TOKEN).
-    harness.run(build_agent(args.agent, args.model, args.max_steps))
-
-
-if __name__ == "__main__":
-    main()
+    harness.run(build_agent(settings["agent"], settings["model"], int(settings["max_steps"])))

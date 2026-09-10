@@ -25,6 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 READ_ONLY = {"read_file", "grep", "glob"}
+# Actions no rule can cover: reconfiguring the harness itself.
+HARNESS_DIR = ".sleipnir"
+SELF_CONFIG_SUBCOMMANDS = {"allow", "config"}
 MUTATING = {"bash", "write_file", "edit_file"}
 
 TOKEN_RE = re.compile(r"\bp-[0-9a-f]{6}\b")
@@ -97,6 +100,18 @@ def subjects(tool: str, subject: str) -> list[str]:
     return shell_segments(subject) if tool == "bash" else [subject]
 
 
+def always_asks(tool: str, subject: str) -> bool:
+    """Reconfiguring the harness always asks, whatever the allow list says,
+    so the agent cannot grant itself permissions with one "always"."""
+    if tool == "bash":
+        for seg in shell_segments(subject):
+            words = seg.split()
+            if len(words) >= 2 and words[0] == "sleipnir" and words[1] in SELF_CONFIG_SUBCOMMANDS:
+                return True
+        return False
+    return subject == HARNESS_DIR or subject.startswith(HARNESS_DIR + "/")
+
+
 def rule_for(tool: str, subject: str) -> list[Rule]:
     """The rules an "always" answer adds: the command word for each
     shell segment, or every path for a file tool."""
@@ -149,11 +164,21 @@ class Permissions:
 
     def reload(self) -> None:
         self.rules = []
+        self._mtime = None
         if self.allow_file and self.allow_file.is_file():
+            self._mtime = self.allow_file.stat().st_mtime_ns
             for line in self.allow_file.read_text().splitlines():
                 rule = Rule.parse(line)
                 if rule:
                     self.rules.append(rule)
+
+    def _refresh(self) -> None:
+        """Pick up edits made outside this process (`sleipnir allow add`)."""
+        if not self.allow_file:
+            return
+        mtime = self.allow_file.stat().st_mtime_ns if self.allow_file.is_file() else None
+        if mtime != self._mtime:
+            self.reload()
 
     def add_rules(self, rules: list[Rule]) -> None:
         new = [r for r in rules if r not in self.rules]
@@ -165,10 +190,23 @@ class Permissions:
             with open(self.allow_file, "a") as f:
                 for r in new:
                     f.write(f"{r}\n")
+            self._mtime = self.allow_file.stat().st_mtime_ns
+
+    def remove_rules(self, rules: list[Rule]) -> int:
+        before = len(self.rules)
+        self.rules = [r for r in self.rules if r not in rules]
+        removed = before - len(self.rules)
+        if removed and self.allow_file:
+            self.allow_file.write_text("".join(f"{r}\n" for r in self.rules))
+            self._mtime = self.allow_file.stat().st_mtime_ns
+        return removed
 
     def allowed(self, tool: str, subject: str) -> bool:
         if tool in READ_ONLY:
             return True
+        if always_asks(tool, subject):
+            return False
+        self._refresh()
         parts = subjects(tool, subject)
         if not parts:
             return False
@@ -210,7 +248,7 @@ class Permissions:
         self.consumed.add(token)
         if decision == "deny":
             raise PermissionDenied(f"the user declined {tool}: {subject}")
-        if decision == "always":
+        if decision == "always" and not always_asks(tool, subject):
             self.add_rules(rule_for(tool, subject))
 
     def observe(self, messages: list[dict]) -> None:

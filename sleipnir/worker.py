@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from norns import Agent, Norns
@@ -44,7 +45,7 @@ def build_agent(name: str, model: str, max_steps: int, compact_at: int, keep: in
     )
 
 
-def run_worker(root: Path, settings: dict[str, str]) -> None:
+def build_harness(root: Path, settings: dict[str, str]) -> tuple[Harness, Agent]:
     runtime.configure(root)
     perms = runtime.permissions()
     logger.info(f"workspace {root}; {len(perms.rules)} allow rules from {perms.allow_file}")
@@ -52,14 +53,31 @@ def run_worker(root: Path, settings: dict[str, str]) -> None:
         f"agent {settings['agent']}, model {settings['model']}, max_steps {settings['max_steps']}, "
         f"compact at {settings['compact_at']} tokens keeping {settings['keep']} messages"
     )
-
     url = os.environ.get("NORNS_URL", "http://localhost:4000")
     harness = Harness(url, api_key=os.environ.get("NORNS_API_KEY"))
-    # Worker identity and gard binding come from the environment
-    # (NORNS_WORKER_ID, NORNS_GARD, NORNS_GARD_CLAIM_TOKEN).
-    harness.run(
-        build_agent(
-            settings["agent"], settings["model"], int(settings["max_steps"]),
-            int(settings["compact_at"]), int(settings["keep"]),
-        )
+    agent = build_agent(
+        settings["agent"], settings["model"], int(settings["max_steps"]),
+        int(settings["compact_at"]), int(settings["keep"]),
     )
+    return harness, agent
+
+
+def run_worker(root: Path, settings: dict[str, str], gard: dict | None = None) -> None:
+    """Serve until told to stop, in this thread."""
+    harness, agent = build_harness(root, settings)
+    harness.run(agent, **gard_kwargs(gard))
+
+
+def worker_thread(harness: Harness, agent: Agent, gard: dict | None) -> threading.Thread:
+    """The same worker, in a background thread beside the session client."""
+    return threading.Thread(
+        target=harness.run, args=(agent,), kwargs=gard_kwargs(gard), name="sleipnir-worker", daemon=True
+    )
+
+
+def gard_kwargs(gard: dict | None) -> dict:
+    # Worker identity and gard binding otherwise come from the environment
+    # (NORNS_WORKER_ID, NORNS_GARD, NORNS_GARD_CLAIM_TOKEN).
+    if gard and gard.get("id") and gard.get("claim_token"):
+        return {"gard": gard["id"], "claim_token": gard["claim_token"]}
+    return {}

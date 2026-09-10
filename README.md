@@ -5,7 +5,8 @@ It runs on your machine, in your repository, and gives a Norns agent six
 tools: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`.
 The agent loop itself runs in Norns, so a session survives the laptop
 sleeping, the terminal closing, or the worker restarting, and every step
-is in the run log where it can be resumed, inspected, or forked.
+is in the run log where it can be resumed, inspected, or forked. The
+same command is the client you talk to it through.
 
 Sleipnir is Odin's eight-legged horse: the fastest steed, and the one
 that carries a rider between worlds.
@@ -27,33 +28,45 @@ export ANTHROPIC_API_KEY=sk-ant-...
 sleipnir
 ```
 
-The worker registers an agent named `sleipnir` (change it with
-`--agent`), connects, and serves both the LLM calls and the tools for
-its runs. Talk to it with `nornsctl`:
+That opens the session client with this repository's worker running in
+the same process. Down the left: every session across every repository
+and machine connected to your Norns, with its live state (thinking,
+running tools, needs you, idle). On the right: the session you are in.
+Type to talk to it. When the agent asks a question, your next line is
+the answer.
 
-```bash
-nornsctl agents send sleipnir "Add a --json flag to the list command"
 ```
+/new              start a new session in this repository (ctrl+n)
+/fork N [message] fork the current session from step N into a new one
+/resume           reload the current session and re-attach to its run
+/help             the commands
+/quit             leave; the worker stops with you, sessions live on in Norns
+```
+
+Sessions survive the client: close it, open it on another machine, and
+the same history and state are there. Only the working tree is local,
+so a session's tool calls always run on the machine whose worker
+started it.
+
+The pieces run alone too: `sleipnir serve` is the worker without a
+client, for a machine you are not sitting at, and `sleipnir chat` is
+the client without a worker.
 
 Options: `--root` (repository root, default the current directory),
-`--model` (default `claude-sonnet-5`), `--max-steps` (default 200),
-`--compact-at` (default 100000) and `--keep` (default 40). Every option
-is also a `SLEIPNIR_<NAME>` environment variable or a `.sleipnir/config`
-setting.
+`--agent` (default `sleipnir`), `--model` (default `claude-sonnet-5`),
+`--max-steps` (default 200), `--compact-at` (default 100000) and
+`--keep` (default 40). Every option is also a `SLEIPNIR_<NAME>`
+environment variable or a `.sleipnir/config` setting.
 
-### Pin it to a gard
+### Spaces are gards
 
-With one worker per repository, pin the worker to a gard so tool calls
-for its runs only ever reach this machine:
-
-```bash
-nornsctl gards create --name laptop     # prints the gard id and a claim token
-export NORNS_GARD=<id> NORNS_GARD_CLAIM_TOKEN=<token>
-sleipnir
-```
-
-Without a gard the worker serves any run that has no gard, which is fine
-when it is the only worker connected.
+Each repository gets its own gard on first start, so runs started from
+this checkout only ever reach the worker running in it, and the session
+list shows which machine and checkout a session belongs to. The gard's
+claim token is kept in `~/.sleipnir/gards.json`, never in the
+repository. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
+`--no-gard` turns it off, in which case the worker serves any run that
+has no gard.
 
 ## Permissions
 

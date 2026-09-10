@@ -1,6 +1,8 @@
-"""`sleipnir`: run the worker, or configure it.
+"""`sleipnir`: the session client with your worker, or the pieces alone.
 
-    sleipnir [run] [--root DIR] [--agent NAME] [--model M] [--max-steps N]
+    sleipnir [run] [--root DIR] [--agent NAME] [--model M] [--max-steps N]   client + worker
+    sleipnir serve ...                                                        worker only, headless
+    sleipnir chat ...                                                         client only
     sleipnir allow list | add <tool> <pattern> | remove <tool> <pattern>
     sleipnir config show | set <key> <value> | unset <key>
     sleipnir doctor
@@ -20,7 +22,7 @@ from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
 
-SUBCOMMANDS = {"run", "allow", "config", "doctor", "docs"}
+SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,12 +31,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="repository root (default: current directory)")
     sub = parser.add_subparsers(dest="command")
 
-    run = sub.add_parser("run", help="connect to Norns and serve the harness (the default)")
-    run.add_argument("--agent", help="agent name in Norns")
-    run.add_argument("--model")
-    run.add_argument("--max-steps", type=int)
-    run.add_argument("--compact-at", type=int, help="input tokens at which Norns compacts the history")
-    run.add_argument("--keep", type=int, help="messages kept verbatim after a compaction")
+    for name, help_text in (
+        ("run", "the session client with this repository's worker (the default)"),
+        ("serve", "the worker alone, headless"),
+        ("chat", "the session client alone, without a worker"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--agent", help="agent name in Norns")
+        p.add_argument("--model")
+        p.add_argument("--max-steps", type=int)
+        p.add_argument("--compact-at", type=int, help="input tokens at which Norns compacts the history")
+        p.add_argument("--keep", type=int, help="messages kept verbatim after a compaction")
+        p.add_argument("--no-gard", action="store_true", help="do not pin this worker to a per-repository gard")
 
     allow = sub.add_parser("allow", help="manage the allow list (.sleipnir/allow)")
     allow_sub = allow.add_subparsers(dest="action", required=True)
@@ -74,8 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         parser.error(f"{root} is not a directory")
 
-    if args.command == "run":
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    if args.command in ("run", "serve", "chat"):
         settings = config.resolve(
             root,
             {
@@ -86,10 +93,7 @@ def main(argv: list[str] | None = None) -> int:
                 "keep": str(args.keep) if args.keep else None,
             },
         )
-        from sleipnir.worker import run_worker
-
-        run_worker(root, settings)
-        return 0
+        return cmd_start(root, settings, mode=args.command, use_gard=not args.no_gard)
     if args.command == "allow":
         return cmd_allow(root, args)
     if args.command == "config":
@@ -99,6 +103,64 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "docs":
         print(DOCS, end="")
         return 0
+    return 0
+
+
+def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool) -> int:
+    import asyncio
+
+    from sleipnir.api import NornsApi
+    from sleipnir.gard import ensure_gard
+
+    url = os.environ.get("NORNS_URL", "http://localhost:4000")
+    api_key = os.environ.get("NORNS_API_KEY", "")
+
+    async def bootstrap():
+        api = NornsApi(url, api_key)
+        try:
+            return await ensure_gard(api, root) if use_gard else None
+        finally:
+            await api.close()
+
+    if mode == "serve":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        from sleipnir.worker import run_worker
+
+        gard = asyncio.run(bootstrap())
+        if gard:
+            logging.getLogger("sleipnir").info(f"gard {gard['id']} ({gard['source']})")
+        run_worker(root, settings, gard)
+        return 0
+
+    # The client owns the terminal; the worker's logs go to a file.
+    log_path = root / ".sleipnir" / "sleipnir.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", filename=str(log_path))
+
+    from sleipnir.app import SleipnirApp
+
+    gard = asyncio.run(bootstrap()) if mode == "run" else None
+    harness = thread = None
+    if mode == "run":
+        from sleipnir.worker import build_harness, worker_thread
+
+        harness, agent = build_harness(root, settings)
+        thread = worker_thread(harness, agent, gard)
+
+    def on_exit():
+        if harness is not None:
+            harness.shutdown()
+            thread.join(timeout=10)
+
+    app = SleipnirApp(
+        NornsApi(url, api_key),
+        agent_name=settings["agent"],
+        gard_id=gard["id"] if gard else None,
+        root=root,
+        worker=thread,
+        on_exit=on_exit,
+    )
+    app.run()
     return 0
 
 

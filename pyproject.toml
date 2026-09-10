@@ -11,6 +11,7 @@ license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "norns-sdk>=0.6.0",
+    "textual>=8.0",
 ]
 
 [project.scripts]
@@ -19,10 +20,12 @@ sleipnir = "sleipnir.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.24",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sleipnir"]

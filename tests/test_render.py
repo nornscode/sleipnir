@@ -1,0 +1,41 @@
+from sleipnir.render import event_lines, message_lines, session_label, text_of, title_of, tool_summary
+
+
+def test_title_and_text():
+    assert title_of({"first_message": "Fix the tests\nplease", "key": "k"}) == "Fix the tests"
+    assert title_of({"first_message": None, "key": "sleipnir-1"}) == "sleipnir-1"
+    assert title_of({"first_message": "x" * 60}).endswith("…")
+    assert text_of({"$enc": "v1"}) == "[encrypted]"
+    assert text_of({"a": 1}) == '{"a": 1}'
+
+
+def test_session_label_status():
+    s = {"id": 1, "first_message": "hi", "agent_name": "sleipnir", "status": "awaiting_tools", "gard_id": 7, "run": {}}
+    label = session_label(s, {7: "laptop"})
+    assert "◑" in label and "running tools" in label and "sleipnir @ laptop" in label
+    # A parked run shows as needing you even when its process is idle.
+    s = {"id": 1, "first_message": "hi", "agent_name": "a", "status": "stopped", "run": {"status": "waiting"}}
+    assert "needs you" in session_label(s)
+
+
+def test_tool_summary():
+    assert tool_summary("bash", {"command": "git status"}) == "git status"
+    assert tool_summary("edit_file", {"path": "a.py", "old_string": "x"}) == "a.py"
+    assert tool_summary("grep", {"pattern": "def", "path": "lib"}) == "/def/ in lib"
+    assert tool_summary("other", {"k": "v"}) == '{"k": "v"}'
+
+
+def test_message_and_event_lines():
+    assert message_lines({"role": "user", "content": "go [x]"}) == ["[b green]›[/] go \\[x]"]
+    lines = message_lines({"role": "assistant", "content": "ok", "tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}]})
+    assert lines == ["ok", "[cyan]⚙ bash[/] ls"]
+    assert message_lines({"role": "tool", "name": "bash", "content": "exit code: 0\nfiles", "is_error": True})[0].startswith("  [red]↳[/]")
+    assert message_lines({"role": "tool", "name": "ask_human", "content": "yes"}) == ["[yellow]?[/] answered: yes"]
+    assert message_lines({"role": "tool", "name": "wait", "kind": "timer_completed", "content": ""}) == ["  [dim]↳ timer_completed[/dim]"]
+
+    assert event_lines("waiting_for_user", {"question": "Allow rm?"})[0] == "[yellow b]? Allow rm?[/]"
+    assert event_lines("completed", {"output": "done\nmore"}) == ["[green]✓ done[/green]", "done\nmore"]
+    assert event_lines("error", {"error": "boom"}) == ["[red]✗ boom[/red]"]
+    assert event_lines("context_compacted", {"dropped": 7}) == ["[dim]… compacted 7 messages into the summary[/dim]"]
+    assert event_lines("tool_result", {"name": "bash", "content": "exit code: 0"}) == ["  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]"]
+    assert event_lines("unknown", {}) == []

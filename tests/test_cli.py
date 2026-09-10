@@ -81,6 +81,10 @@ def test_allow_file_edits_are_picked_up_live(tmp_path):
 
 def test_bare_invocation_means_run(monkeypatch):
     calls = []
-    monkeypatch.setattr("sleipnir.worker.run_worker", lambda root, settings: calls.append((root, settings)))
+    monkeypatch.setattr("sleipnir.cli.cmd_start", lambda root, settings, *, mode, use_gard: calls.append((mode, use_gard, settings)) or 0)
     assert main(["--agent", "x", "--root", "."]) == 0
-    assert calls[0][1]["agent"] == "x"
+    assert calls[0][0] == "run" and calls[0][1] is True and calls[0][2]["agent"] == "x"
+    assert main(["serve", "--no-gard"]) == 0
+    assert calls[1][:2] == ("serve", False)
+    assert main(["chat"]) == 0
+    assert calls[2][0] == "chat"

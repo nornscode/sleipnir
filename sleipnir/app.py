@@ -18,20 +18,24 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static, TabbedContent, TabPane
+from rich.markdown import Markdown
+from textual.widgets import Footer, Input, Label, ListItem, ListView, OptionList, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
+    Md,
     event_lines,
     expand_answer,
     message_lines,
     permission_details,
+    permission_in_question,
     run_event_lines,
     space_label,
     text_of,
     title_of,
 )
 from sleipnir.stream import AgentStream
+from sleipnir.widgets import PermissionPrompt
 
 logger = logging.getLogger("sleipnir.app")
 
@@ -149,6 +153,7 @@ class SleipnirApp(App):
             yield ListView(id="sidebar")
             with Vertical(id="main"):
                 yield TabbedContent(id="tabs")
+                yield PermissionPrompt()
                 yield Input(placeholder="message the agent, or /help", id="prompt")
                 yield Static("", id="status")
         yield Footer()
@@ -162,7 +167,7 @@ class SleipnirApp(App):
         self.stream.start()
         self.set_interval(self.poll_seconds, self.refresh_sessions)
         await self.refresh_sessions().wait()
-        self.query_one("#prompt", Input).focus()
+        self._focus_default()
 
     async def on_unmount(self) -> None:
         if self.stream:
@@ -262,7 +267,7 @@ class SleipnirApp(App):
             return
         self.current_space = gard_id
         await self._sync_tabs(reset=True)
-        self.query_one("#prompt", Input).focus()
+        self._focus_default()
 
     async def _sync_tabs(self, reset: bool = False) -> None:
         """The tabs are the sessions of the current space, oldest on the left."""
@@ -388,20 +393,53 @@ class SleipnirApp(App):
             if not replay:
                 self.tabs[pane_id].loaded = True
             await self._ensure_loaded(pane_id)
-        self.query_one("#prompt", Input).focus()
+        self._focus_default()
 
     def active_tab(self) -> Tab | None:
         return self.tabs.get(self.query_one("#tabs", TabbedContent).active or "")
 
     def _update_prompt(self) -> None:
+        """The permission selector shows for a pending permission on the
+        active tab; the input's placeholder says what a line will do."""
         tab = self.active_tab()
         prompt = self.query_one("#prompt", Input)
+        selector = self.query_one(PermissionPrompt)
+        action = permission_in_question(tab.question, tab.permissions) if tab and tab.question else None
+        if action:
+            if not selector.display or (selector.tool, selector.subject) != action:
+                selector.show(*action)
+            prompt.placeholder = "or type a reply to the agent"
+            return
+        selector.hide()
         if tab and tab.question:
-            prompt.placeholder = "y / a / n, or type a reply"
+            prompt.placeholder = "answer the question"
         elif tab is None or tab.session_id == 0:
             prompt.placeholder = "type to start a new session, or /help"
         else:
             prompt.placeholder = "message the agent, or /help"
+
+    def _focus_default(self) -> None:
+        selector = self.query_one(PermissionPrompt)
+        if selector.display:
+            selector.query_one(OptionList).focus()
+        else:
+            self.query_one("#prompt", Input).focus()
+
+    async def on_permission_prompt_answered(self, event: PermissionPrompt.Answered) -> None:
+        tab = self.active_tab()
+        if tab is None or not tab.question or not tab.run_id:
+            return
+        try:
+            await self.api.reply(tab.run_id, event.answer)
+        except ApiError as e:
+            self.notify(e.message, severity="error")
+            return
+        tab.question = None
+        self._update_prompt()
+        self.query_one("#prompt", Input).focus()
+
+    def on_permission_prompt_type_reply(self, event: PermissionPrompt.TypeReply) -> None:
+        self._focus_default()
 
     # -- live events -------------------------------------------------------
 
@@ -606,7 +644,7 @@ class SleipnirApp(App):
             space = self.spaces.get(self.current_space)
             if space:
                 space.sessions = [s for s in space.sessions if s["id"] != sid]
-        self.query_one("#prompt", Input).focus()
+        self._focus_default()
 
     def set_tab_title(self, pane_id: str, title: str) -> None:
         try:
@@ -628,7 +666,7 @@ class SleipnirApp(App):
             where = space.name if space else self.root.name
             log.write(f"[dim]a new session in {where}; type to start it[/dim]")
         tabs.active = "new"
-        self.query_one("#prompt", Input).focus()
+        self._focus_default()
 
     def action_refresh(self) -> None:
         self.refresh_sessions()
@@ -639,8 +677,10 @@ class SleipnirApp(App):
         for line in lines:
             self.log_line(tab, line)
 
-    def log_line(self, tab: Tab | None, line: str) -> None:
+    def log_line(self, tab: Tab | None, line) -> None:
         target = f"#log-{tab.session_id}" if tab and tab.session_id else "#log-new"
+        if isinstance(line, Md):
+            line = Markdown(line.text, code_theme="monokai")
         try:
             self.query_one(target, RichLog).write(line)
         except Exception:

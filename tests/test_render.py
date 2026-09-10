@@ -1,4 +1,4 @@
-from sleipnir.render import event_lines, message_lines, session_label, text_of, title_of, tool_summary
+from sleipnir.render import Md, event_lines, message_lines, session_label, text_of, title_of, tool_summary
 
 
 def test_title_and_text():
@@ -29,7 +29,7 @@ def test_tool_summary():
 def test_message_and_event_lines():
     assert message_lines({"role": "user", "content": "go [x]"}) == ["", "[b green]›[/] go \\[x]"]
     lines = message_lines({"role": "assistant", "content": "ok", "tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}]})
-    assert lines == ["", "ok", "[cyan]⚙ bash[/] ls"]
+    assert lines == ["", Md("ok"), "[cyan]⚙ bash[/] ls"]
     assert message_lines({"role": "tool", "name": "bash", "content": "exit code: 0\nfiles", "is_error": True})[0].startswith("  [red]↳[/]")
     assert message_lines({"role": "tool", "name": "ask_human", "content": "yes"}) == ["", "[b green]›[/] yes"]
     assert message_lines({"role": "assistant", "content": "", "tool_calls": [{"name": "ask_human", "arguments": {"question": "Allow rm? [p-1]"}}]}) == ["", "[yellow b]? Allow rm? \\[p-1][/]"]
@@ -40,7 +40,7 @@ def test_message_and_event_lines():
     assert event_lines("llm_response", {"content": "", "tool_calls": [{"name": "ask_human", "arguments": {"question": "q"}}]}) == []
     assert event_lines("tool_result", {"name": "ask_human", "content": "always"}) == ["", "[b green]›[/] always"]
     assert event_lines("tool_result", {"name": "bash", "content": "permission required (token p-2)\nbash: ls", "is_error": True}) == []
-    assert event_lines("completed", {"output": "done\nmore"}) == ["", "done\nmore", "", "[green]✓ done[/green]"]
+    assert event_lines("completed", {"output": "done\nmore"}) == ["", Md("done\nmore"), "", "[green]✓ done[/green]"]
     assert event_lines("completed", {"output": ""}) == ["", "[green]✓ done[/green]"]
     assert event_lines("error", {"error": "boom"}) == ["[red]✗ boom[/red]"]
     assert event_lines("context_compacted", {"dropped": 7}) == ["[dim]… compacted 7 messages into the summary[/dim]"]

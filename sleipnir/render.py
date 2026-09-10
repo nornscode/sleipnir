@@ -4,11 +4,18 @@ in the client, never by Norns."""
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from typing import Any
 
-import re
-
 from rich.markup import escape
+
+@dataclass(frozen=True)
+class Md:
+    """Assistant prose: rendered as Markdown by the pane, not as markup."""
+
+    text: str
+
 
 STATUS_GLYPH = {
     "idle": ("○", "dim"),
@@ -146,7 +153,6 @@ def question_lines(question: str, known: dict[str, tuple[str, str]] | None = Non
     lines += [f"[yellow]    {escape(line)}[/]" for line in subject.splitlines()[:8]]
     if len(subject.splitlines()) > 8:
         lines.append("[yellow]    …[/]")
-    lines.append("[dim]  y allow once · a always allow · n deny · or type a reply[/dim]")
     return lines
 
 
@@ -170,7 +176,7 @@ def message_lines(msg: dict, known: dict[str, tuple[str, str]] | None = None) ->
             return ["", "[dim]· inherited context[/dim]"]
         return ["", f"[b green]›[/] {escape(content)}"]
     if role == "assistant":
-        lines = ["", escape(content)] if content.strip() else []
+        lines = ["", Md(content)] if content.strip() else []
         lines += tool_call_lines(msg.get("tool_calls") or [], known)
         return lines
     if role == "tool":
@@ -234,7 +240,7 @@ def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | N
         lines = []
         content = text_of(payload.get("content"))
         if content.strip():
-            lines += ["", escape(content)]
+            lines += ["", Md(content)]
         # The question itself arrives as waiting_for_user right after.
         lines += tool_call_lines([tc for tc in payload.get("tool_calls") or [] if tc.get("name") != "ask_human"])
         return lines
@@ -246,7 +252,7 @@ def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | N
         return [f"[dim]◔ waiting {payload.get('seconds')}s[/dim]"]
     if event == "completed":
         out = text_of(payload.get("output")).strip()
-        return ([""] if out else []) + ([escape(out)] if out else []) + ["", "[green]✓ done[/green]"]
+        return (["", Md(out)] if out else []) + ["", "[green]✓ done[/green]"]
     if event == "error":
         return [f"[red]✗ {escape(text_of(payload.get('error')))}[/red]"]
     if event == "context_compacted":

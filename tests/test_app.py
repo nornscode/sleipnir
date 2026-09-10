@@ -7,6 +7,7 @@ import pytest
 from textual.widgets import Input, ListView, RichLog, TabbedContent
 
 from sleipnir.app import SleipnirApp, SpaceItem
+from sleipnir.widgets import PermissionPrompt
 
 
 class FakeApi:
@@ -122,16 +123,18 @@ async def test_spaces_tabs_send_reply_and_fork():
         assert app.tabs["s2"].title == "add a flag"
         assert "bash wants to run" in log_text(log2) and "rm -rf build" in log_text(log2)
         assert "p-ab12cd" not in log_text(log2)
-        assert app.query_one("#prompt", Input).placeholder.startswith("y / a / n")
 
-        # The parked session: the next line answers the question.
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "a"
-        await prompt.action_submit()
+        # The parked session shows the selector, focused; a key answers it.
+        selector = app.query_one(PermissionPrompt)
+        assert selector.display and (selector.tool, selector.subject) == ("bash", "rm -rf build")
+        assert app.focused is not None and app.focused.id == "perm-options"
+        await pilot.press("down", "enter")
         await pilot.pause()
         assert api.calls[-1] == ("reply", 12, "always")
         assert app.tabs["s2"].question is None
-        assert app.query_one("#prompt", Input).placeholder.startswith("message")
+        assert not selector.display
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.placeholder.startswith("message") and app.focused is prompt
 
         # Switch tab, type: the message goes to that session on this space's gard.
         tabs.active = "s1"

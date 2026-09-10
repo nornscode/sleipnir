@@ -36,14 +36,15 @@ has allowed it), then its `.env`. A variable the shell already has is
 never overridden.
 
 That opens the session client with this repository's worker running in
-the same process. Down the left: every session across every repository
-and machine connected to your Norns, with its live state (thinking,
-running tools, needs you, idle). On the right: the session you are in.
-Type to talk to it. When the agent asks a question, your next line is
-the answer.
+the same process. Down the left: your spaces, one per checkout with a
+worker in it (this one first), each showing how many sessions are
+working or waiting on you. Across the top: the sessions of the selected
+space, as tabs. Type to talk to the session you are in. When the agent
+asks a question, your next line is the answer.
 
 ```
-/new              start a new session in this repository (ctrl+n)
+/new              start a new session in this space (ctrl+n)
+/close            close the current tab (ctrl+w); the session lives on
 /fork N [message] fork the current session from step N into a new one
 /resume           reload the current session and re-attach to its run
 /help             the commands
@@ -95,8 +96,9 @@ environment works as before.
 ### Spaces are gards
 
 Each repository gets its own gard on first start, so runs started from
-this checkout only ever reach the worker running in it, and the session
-list shows which machine and checkout a session belongs to. The gard's
+this checkout only ever reach the worker running in it, and every gard
+is a space in the sidebar. Sessions no gard serves share a "no gard"
+space. The gard's
 claim token is kept in `~/.sleipnir/gards.json`, never in the
 repository. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
 `--no-gard` turns it off, in which case the worker serves any run that

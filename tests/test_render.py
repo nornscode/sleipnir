@@ -26,16 +26,25 @@ def test_tool_summary():
 
 
 def test_message_and_event_lines():
-    assert message_lines({"role": "user", "content": "go [x]"}) == ["[b green]›[/] go \\[x]"]
+    assert message_lines({"role": "user", "content": "go [x]"}) == ["", "[b green]›[/] go \\[x]"]
     lines = message_lines({"role": "assistant", "content": "ok", "tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}]})
-    assert lines == ["ok", "[cyan]⚙ bash[/] ls"]
+    assert lines == ["", "ok", "[cyan]⚙ bash[/] ls"]
     assert message_lines({"role": "tool", "name": "bash", "content": "exit code: 0\nfiles", "is_error": True})[0].startswith("  [red]↳[/]")
     assert message_lines({"role": "tool", "name": "ask_human", "content": "yes"}) == ["[yellow]?[/] answered: yes"]
     assert message_lines({"role": "tool", "name": "wait", "kind": "timer_completed", "content": ""}) == ["  [dim]↳ timer_completed[/dim]"]
 
-    assert event_lines("waiting_for_user", {"question": "Allow rm?"})[0] == "[yellow b]? Allow rm?[/]"
-    assert event_lines("completed", {"output": "done\nmore"}) == ["[green]✓ done[/green]", "done\nmore"]
+    assert event_lines("waiting_for_user", {"question": "Allow rm?"})[1] == "[yellow b]? Allow rm?[/]"
+    assert event_lines("completed", {"output": "done\nmore"}) == ["", "done\nmore", "", "[green]✓ done[/green]"]
+    assert event_lines("completed", {"output": ""}) == ["", "[green]✓ done[/green]"]
     assert event_lines("error", {"error": "boom"}) == ["[red]✗ boom[/red]"]
     assert event_lines("context_compacted", {"dropped": 7}) == ["[dim]… compacted 7 messages into the summary[/dim]"]
     assert event_lines("tool_result", {"name": "bash", "content": "exit code: 0"}) == ["  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]"]
     assert event_lines("unknown", {}) == []
+
+
+def test_space_label():
+    from sleipnir.render import space_label
+
+    label = space_label("laptop", [{"status": "awaiting_llm"}, {"status": "idle", "run": {"status": "waiting"}}])
+    assert "●" in label and "laptop" in label and "2 sessions · 1 working · 1 need you" in label
+    assert "○" in space_label("empty", [])

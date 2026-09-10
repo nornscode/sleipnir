@@ -65,6 +65,24 @@ def session_label(session: dict, gard_names: dict[int, str] | None = None) -> st
     return f"[{colour}]{glyph}[/] [b]{escape(title_of(session))}[/b]\n  [dim]{escape(where)} · {STATUS_WORD.get(status, status)}[/dim]"
 
 
+def space_label(name: str, sessions: list[dict]) -> str:
+    """One sidebar row for a space: its name and what its sessions are doing."""
+    working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
+    waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
+    if waiting:
+        glyph, colour = "●", "yellow"
+    elif working:
+        glyph, colour = "◐", "cyan"
+    else:
+        glyph, colour = "○", "dim"
+    parts = [f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"]
+    if working:
+        parts.append(f"{working} working")
+    if waiting:
+        parts.append(f"{waiting} need you")
+    return f"[{colour}]{glyph}[/] [b]{escape(name)}[/b]\n  [dim]{' · '.join(parts)}[/dim]"
+
+
 def tool_summary(name: str, arguments: Any) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     if name == "bash":
@@ -94,10 +112,10 @@ def message_lines(msg: dict) -> list[str]:
     kind = msg.get("kind")
     if role == "user":
         if kind == "inherited_context":
-            return [f"[dim]· inherited context[/dim]"]
-        return [f"[b green]›[/] {escape(content)}"]
+            return ["", "[dim]· inherited context[/dim]"]
+        return ["", f"[b green]›[/] {escape(content)}"]
     if role == "assistant":
-        lines = [escape(content)] if content.strip() else []
+        lines = ["", escape(content)] if content.strip() else []
         for tc in msg.get("tool_calls") or []:
             lines.append(f"[cyan]⚙ {escape(tc.get('name', '?'))}[/] {escape(tool_summary(tc.get('name', ''), tc.get('arguments')))}")
         return lines
@@ -119,7 +137,7 @@ def event_lines(event: str, payload: dict) -> list[str]:
         lines = []
         content = text_of(payload.get("content"))
         if content.strip():
-            lines.append(escape(content))
+            lines += ["", escape(content)]
         for tc in payload.get("tool_calls") or []:
             lines.append(f"[cyan]⚙ {escape(tc.get('name', '?'))}[/] {escape(tool_summary(tc.get('name', ''), tc.get('arguments')))}")
         return lines
@@ -130,12 +148,12 @@ def event_lines(event: str, payload: dict) -> list[str]:
         marker = "[red]↳[/]" if payload.get("is_error") else "[dim]↳[/dim]"
         return [f"  {marker} [dim]{escape(payload.get('name', ''))}: {escape(first_line(content))}[/dim]"]
     if event == "waiting_for_user":
-        return [f"[yellow b]? {escape(text_of(payload.get('question')))}[/]", "[yellow]  type your answer below[/yellow]"]
+        return ["", f"[yellow b]? {escape(text_of(payload.get('question')))}[/]", "[yellow]  type your answer below[/yellow]"]
     if event == "waiting_timer":
         return [f"[dim]◔ waiting {payload.get('seconds')}s[/dim]"]
     if event == "completed":
         out = text_of(payload.get("output")).strip()
-        return [f"[green]✓ done[/green]"] + ([escape(out)] if out else [])
+        return ([""] if out else []) + ([escape(out)] if out else []) + ["", "[green]✓ done[/green]"]
     if event == "error":
         return [f"[red]✗ {escape(text_of(payload.get('error')))}[/red]"]
     if event == "context_compacted":

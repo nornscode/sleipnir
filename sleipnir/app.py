@@ -1,9 +1,12 @@
-"""The session client: every session across every gard down the side, the
-one you are in on the right, your worker in the same process."""
+"""The session client: spaces down the side, the sessions of the selected
+space as tabs, your worker in the same process.
+
+A space is a gard: a checkout on a machine with a worker in it. Sessions
+that no gard serves share a "no gard" space.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shlex
 import threading
@@ -18,15 +21,17 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
-from sleipnir.render import event_lines, message_lines, session_label, text_of, title_of
+from sleipnir.render import event_lines, message_lines, space_label, text_of, title_of
 from sleipnir.stream import AgentStream
 
 logger = logging.getLogger("sleipnir.app")
 
-HELP = """[b]sleipnir[/b] — sessions on the left, the one you are in on the right.
-Type to talk to the agent of this repository; when it asks a question, your next line answers it.
+NO_GARD = 0
 
-  /new              start a new session in this repository
+HELP = """[b]sleipnir[/b] — spaces on the left (one per checkout with a worker), the sessions of the selected space as tabs.
+Type to talk to the session you are in; when the agent asks a question, your next line answers it.
+
+  /new              start a new session in this space (ctrl+n)
   /fork N [message] fork the current session from step N into a new one
   /resume           reload the current session and re-attach to its run
   /close            close the current tab (ctrl+w); the session lives on
@@ -47,6 +52,28 @@ class Tab:
     question: str | None = None
     last_assistant: str = ""
     title: str = ""
+    loaded: bool = False
+
+
+@dataclass
+class Space:
+    gard_id: int
+    name: str
+    sessions: list[dict] = field(default_factory=list)
+
+
+class SpaceItem(ListItem):
+    def __init__(self, space: Space):
+        self.space = space
+        self.markup = space_label(space.name, space.sessions)
+        super().__init__(Label(self.markup, markup=True))
+
+    def refresh_space(self, space: Space) -> None:
+        self.space = space
+        markup = space_label(space.name, space.sessions)
+        if markup != self.markup:
+            self.markup = markup
+            self.query_one(Label).update(markup)
 
 
 def tab_title(session: dict, width: int = 22) -> str:
@@ -54,24 +81,9 @@ def tab_title(session: dict, width: int = 22) -> str:
     return title if len(title) <= width else title[: width - 1] + "…"
 
 
-class SessionItem(ListItem):
-    def __init__(self, session: dict, gard_names: dict[int, str]):
-        self.markup = session_label(session, gard_names)
-        super().__init__(Label(self.markup, markup=True))
-        self.session = session
-
-    def refresh_session(self, session: dict, gard_names: dict[int, str]) -> None:
-        """Update in place; a redraw only when the row's text changed."""
-        self.session = session
-        markup = session_label(session, gard_names)
-        if markup != self.markup:
-            self.markup = markup
-            self.query_one(Label).update(markup)
-
-
 class SleipnirApp(App):
     CSS = """
-    #sidebar { width: 36; border-right: solid $primary-background; }
+    #sidebar { width: 30; border-right: solid $primary-background; }
     #sidebar ListItem { padding: 0 1; }
     #main { width: 1fr; }
     #tabs { height: 1fr; }
@@ -82,8 +94,8 @@ class SleipnirApp(App):
 
     BINDINGS = [
         Binding("ctrl+n", "new_session", "New"),
-        Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+w", "close_tab", "Close"),
+        Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -110,6 +122,8 @@ class SleipnirApp(App):
         self.poll_seconds = poll_seconds
         self.tabs: dict[str, Tab] = {}
         self.sessions: dict[int, dict] = {}
+        self.spaces: dict[int, Space] = {}
+        self.current_space: int | None = gard_id
         self.gard_names: dict[int, str] = {}
         self.agent_id: int | None = None
         self._pending_key: str | None = None
@@ -144,7 +158,7 @@ class SleipnirApp(App):
         if self.on_exit:
             self.on_exit()
 
-    # -- sessions ----------------------------------------------------------
+    # -- spaces and sessions -----------------------------------------------
 
     @work(exclusive=True, group="sessions")
     async def refresh_sessions(self) -> None:
@@ -157,44 +171,14 @@ class SleipnirApp(App):
             return
 
         self.sessions = {s["id"]: s for s in sessions}
-        listview = self.query_one("#sidebar", ListView)
-        items = list(listview.query(SessionItem))
-        if [i.session["id"] for i in items] == [s["id"] for s in sessions]:
-            # Same rows in the same order: touch only what changed, no flicker.
-            for item, s in zip(items, sessions):
-                item.refresh_session(s, self.gard_names)
-        else:
-            highlighted = listview.highlighted_child
-            current = highlighted.session["id"] if isinstance(highlighted, SessionItem) else None
-            await listview.clear()
-            for s in sessions:
-                await listview.append(SessionItem(s, self.gard_names))
-            if current is not None:
-                for i, s in enumerate(sessions):
-                    if s["id"] == current:
-                        listview.index = i
-                        break
+        self.spaces = self._group_spaces(sessions)
+        await self._render_sidebar()
 
-        # Open tabs learn about runs started elsewhere, and their titles.
-        for pane_id, tab in self.tabs.items():
-            s = self.sessions.get(tab.session_id)
-            if s is None:
-                continue
-            title = tab_title(s)
-            if title != tab.title:
-                tab.title = title
-                self.set_tab_title(pane_id, title)
-            run = s.get("run") or {}
-            if run.get("id") and run["id"] != tab.run_id:
-                tab.run_id = run["id"]
-            if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
-                if tab.question != run["waiting_for"]["question"]:
-                    tab.question = run["waiting_for"]["question"]
-                    self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
-            elif run.get("status") != "waiting":
-                tab.question = None
+        if self.current_space is None or self.current_space not in self.spaces:
+            self.current_space = next(iter(self.spaces), None)
+        await self._sync_tabs()
 
-        # A session we just started shows up: open it in place of the "new" tab.
+        # A session we just started shows up: replace the "new" tab with it.
         if self._pending_key:
             for s in sessions:
                 if s["key"] == self._pending_key:
@@ -202,14 +186,50 @@ class SleipnirApp(App):
                     await self.close_new_tab()
                     await self.open_session(s, replay=False)
                     if self._pending_text:
-                        self.log_line(self.tabs[f"s{s['id']}"], f"[b green]›[/] {self._pending_text}")
+                        self.log_lines(self.tabs[f"s{s['id']}"], ["", f"[b green]›[/] {self._pending_text}"])
                         self._pending_text = None
                     break
 
         waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
         thinking = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
-        gard = f"gard {self.gard_names.get(self.gard_id, self.gard_id)}" if self.gard_id else "no gard"
-        self.set_status(f"{len(sessions)} sessions · {thinking} working · {waiting} need you · {gard} · agent {self.agent_name}")
+        here = self.gard_names.get(self.gard_id, self.gard_id) if self.gard_id else "no gard"
+        self.set_status(
+            f"{len(self.spaces)} spaces · {len(sessions)} sessions · {thinking} working · {waiting} need you · "
+            f"this checkout: {here} · agent {self.agent_name}"
+        )
+
+    def _group_spaces(self, sessions: list[dict]) -> dict[int, Space]:
+        spaces: dict[int, Space] = {}
+        if self.gard_id:
+            spaces[self.gard_id] = Space(self.gard_id, self.gard_names.get(self.gard_id, f"gard {self.gard_id}"))
+        for s in sessions:
+            gid = s.get("gard_id") or NO_GARD
+            if gid not in spaces:
+                name = "no gard" if gid == NO_GARD else self.gard_names.get(gid, f"gard {gid}")
+                spaces[gid] = Space(gid, name)
+            spaces[gid].sessions.append(s)
+        # This checkout first, then the rest by most recent activity, no-gard last.
+        def order(item):
+            gid, space = item
+            latest = max((s.get("updated_at") or "" for s in space.sessions), default="")
+            return (gid != self.gard_id, gid == NO_GARD, latest and "~" or "", "")
+        return dict(sorted(spaces.items(), key=lambda item: (item[0] != self.gard_id, item[0] == NO_GARD, -len(item[1].sessions))))
+
+    async def _render_sidebar(self) -> None:
+        listview = self.query_one("#sidebar", ListView)
+        items = list(listview.query(SpaceItem))
+        spaces = list(self.spaces.values())
+        if [i.space.gard_id for i in items] == [sp.gard_id for sp in spaces]:
+            for item, space in zip(items, spaces):
+                item.refresh_space(space)
+            return
+        await listview.clear()
+        for sp in spaces:
+            await listview.append(SpaceItem(sp))
+        for i, sp in enumerate(spaces):
+            if sp.gard_id == self.current_space:
+                listview.index = i
+                break
 
     async def _learn_agent_and_gards(self) -> None:
         for a in await self.api.agents():
@@ -221,38 +241,114 @@ class SleipnirApp(App):
             self.gard_names = {}
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if isinstance(event.item, SessionItem):
-            await self.open_session(event.item.session)
+        if isinstance(event.item, SpaceItem):
+            await self.select_space(event.item.space.gard_id)
+
+    async def select_space(self, gard_id: int) -> None:
+        if gard_id == self.current_space:
+            return
+        self.current_space = gard_id
+        await self._sync_tabs(reset=True)
+        self.query_one("#prompt", Input).focus()
+
+    async def _sync_tabs(self, reset: bool = False) -> None:
+        """The tabs are the sessions of the current space, oldest on the left."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        space = self.spaces.get(self.current_space) if self.current_space is not None else None
+        wanted = list(reversed(space.sessions)) if space else []
+        wanted_ids = [f"s{s['id']}" for s in wanted]
+
+        if reset:
+            for pane_id in list(self.tabs):
+                if pane_id != "new":
+                    self.tabs.pop(pane_id, None)
+                    try:
+                        await tabs.remove_pane(pane_id)
+                    except Exception:
+                        pass
+
+        for pane_id in list(self.tabs):
+            if pane_id != "new" and pane_id not in wanted_ids:
+                self.tabs.pop(pane_id, None)
+                try:
+                    await tabs.remove_pane(pane_id)
+                except Exception:
+                    pass
+
+        first_fill = not any(pid != "new" for pid in self.tabs)
+
+        for s in wanted:
+            pane_id = f"s{s['id']}"
+            run = s.get("run") or {}
+            if pane_id not in self.tabs:
+                tab = Tab(session_id=s["id"], agent_id=s["agent_id"], key=s["key"], run_id=run.get("id"), title=tab_title(s))
+                self.tabs[pane_id] = tab
+                log = RichLog(wrap=True, markup=True, highlight=False, id=f"log-{s['id']}")
+                await tabs.add_pane(TabPane(tab.title, log, id=pane_id))
+                await self.stream.join(s["agent_id"])
+                continue
+            tab = self.tabs[pane_id]
+            title = tab_title(s)
+            if title != tab.title:
+                tab.title = title
+                self.set_tab_title(pane_id, title)
+            if run.get("id") and run["id"] != tab.run_id:
+                tab.run_id = run["id"]
+            if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
+                if tab.question != run["waiting_for"]["question"]:
+                    tab.question = run["waiting_for"]["question"]
+                    if tab.loaded:
+                        self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
+            elif run.get("status") != "waiting":
+                tab.question = None
+
+        if (reset or first_fill or not tabs.active or tabs.active not in self.tabs) and wanted_ids:
+            tabs.active = wanted_ids[-1]
+        await self._ensure_loaded(tabs.active)
+
+    async def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        await self._ensure_loaded(event.pane.id)
+
+    async def _ensure_loaded(self, pane_id: str | None) -> None:
+        """A tab's history is fetched the first time it is shown."""
+        tab = self.tabs.get(pane_id or "")
+        if tab is None or tab.loaded or tab.session_id == 0:
+            return
+        tab.loaded = True
+        try:
+            full = await self.api.session(tab.session_id)
+        except Exception as e:
+            self.log_line(tab, f"[red]could not load session: {e}[/red]")
+            return
+        for msg in full.get("messages") or []:
+            self.log_lines(tab, message_lines(msg))
+        run = full.get("run") or {}
+        if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
+            tab.question = run["waiting_for"]["question"]
+            self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
+        elif run.get("status") == "running":
+            self.log_line(tab, "[dim]— run in progress; attached —[/dim]")
 
     async def open_session(self, session: dict, *, replay: bool = True) -> None:
+        """Show a session: switch to its space if needed, activate its tab."""
+        gid = session.get("gard_id") or NO_GARD
+        if gid != self.current_space:
+            self.current_space = gid
+            self.spaces = self._group_spaces(list(self.sessions.values()))
+            await self._render_sidebar()
+            await self._sync_tabs(reset=True)
         pane_id = f"s{session['id']}"
+        if pane_id not in self.tabs:
+            if session["id"] not in self.sessions:
+                self.sessions[session["id"]] = session
+                self.spaces = self._group_spaces(list(self.sessions.values()))
+            await self._sync_tabs()
         tabs = self.query_one("#tabs", TabbedContent)
         if pane_id in self.tabs:
             tabs.active = pane_id
-            self.query_one("#prompt", Input).focus()
-            return
-
-        run = session.get("run") or {}
-        tab = Tab(session_id=session["id"], agent_id=session["agent_id"], key=session["key"], run_id=run.get("id"), title=tab_title(session))
-        self.tabs[pane_id] = tab
-        log = RichLog(wrap=True, markup=True, highlight=False, id=f"log-{session['id']}")
-        await tabs.add_pane(TabPane(tab.title, log, id=pane_id))
-        tabs.active = pane_id
-        await self.stream.join(session["agent_id"])
-
-        if replay:
-            try:
-                full = await self.api.session(session["id"])
-            except Exception as e:
-                self.log_line(tab, f"[red]could not load session: {e}[/red]")
-                full = session
-            for msg in full.get("messages") or []:
-                self.log_lines(tab, message_lines(msg))
-            if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
-                tab.question = run["waiting_for"]["question"]
-                self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}))
-            elif run.get("status") in ("running",):
-                self.log_line(tab, "[dim]— run in progress; attached —[/dim]")
+            if not replay:
+                self.tabs[pane_id].loaded = True
+            await self._ensure_loaded(pane_id)
         self.query_one("#prompt", Input).focus()
 
     def active_tab(self) -> Tab | None:
@@ -264,7 +360,6 @@ class SleipnirApp(App):
         run_id = payload.get("run_id")
         tab = next((t for t in self.tabs.values() if t.run_id == run_id and t.agent_id == agent_id), None)
         if tab is None:
-            # A run we have not mapped yet (started elsewhere, or just now): learn it.
             self.refresh_sessions()
             return
         if event == "waiting_for_user":
@@ -274,13 +369,12 @@ class SleipnirApp(App):
         if event == "llm_response":
             tab.last_assistant = text_of(payload.get("content")).strip()
         if event == "completed":
-            # The run's output is the last thing the model said; it was
-            # already printed when the response arrived.
             output = text_of(payload.get("output")).strip()
             if output and output == tab.last_assistant:
                 payload = {**payload, "output": ""}
-        self.log_lines(tab, event_lines(event, payload))
-        if event in ("completed", "error", "waiting_for_user"):
+        if tab.loaded:
+            self.log_lines(tab, event_lines(event, payload))
+        if event in ("completed", "error", "waiting_for_user", "agent_started"):
             self.refresh_sessions()
 
     # -- input -------------------------------------------------------------
@@ -300,32 +394,48 @@ class SleipnirApp(App):
         if tab.question and tab.run_id:
             try:
                 await self.api.reply(tab.run_id, text)
-                self.log_line(tab, f"[b green]›[/] {text}")
+                self.log_lines(tab, ["", f"[b green]›[/] {text}"])
                 tab.question = None
             except ApiError as e:
                 self.log_line(tab, f"[red]{e.message}[/red]")
             return
         await self.send(tab, text)
 
+    def _gard_for(self, agent_id: int | None) -> int | None:
+        space = self.current_space
+        return space if space and space != NO_GARD else None
+
     async def send(self, tab: Tab, text: str) -> None:
-        gard = self.gard_id if tab.agent_id == self.agent_id else None
+        session = self.sessions.get(tab.session_id) or {}
+        gard = session.get("gard_id") or None
         try:
             run_id = await self.api.send_message(tab.agent_id, text, conversation_key=tab.key, gard_id=gard)
         except ApiError as e:
             self.log_line(tab, f"[red]{e.message}[/red]")
             return
         tab.run_id = run_id
-        self.log_line(tab, f"[b green]›[/] {text}")
+        self.log_lines(tab, ["", f"[b green]›[/] {text}"])
+
+    def _agent_for_space(self) -> int | None:
+        """The agent a new session in the current space talks to: this
+        worker's agent in this checkout, else the space's most recent agent."""
+        if self.current_space == self.gard_id and self.agent_id is not None:
+            return self.agent_id
+        space = self.spaces.get(self.current_space) if self.current_space is not None else None
+        if space and space.sessions:
+            return space.sessions[0]["agent_id"]
+        return self.agent_id
 
     async def start_session(self, text: str) -> None:
         if self.agent_id is None:
             await self._learn_agent_and_gards()
-        if self.agent_id is None:
+        agent_id = self._agent_for_space()
+        if agent_id is None:
             self.notify(f"agent {self.agent_name} is not registered yet; is the worker running?", severity="error")
             return
         key = f"sleipnir-{time.strftime('%Y%m%d-%H%M%S')}"
         try:
-            await self.api.send_message(self.agent_id, text, conversation_key=key, gard_id=self.gard_id)
+            await self.api.send_message(agent_id, text, conversation_key=key, gard_id=self._gard_for(agent_id))
         except ApiError as e:
             self.notify(e.message, severity="error")
             return
@@ -379,6 +489,7 @@ class SleipnirApp(App):
             forked = await self.api.run(result["run_id"])
             for s in await self.api.sessions():
                 if s["id"] == forked.get("conversation_id"):
+                    self.sessions[s["id"]] = s
                     await self.open_session(s, replay=True)
                     break
             self.refresh_sessions()
@@ -395,6 +506,7 @@ class SleipnirApp(App):
         except ApiError as e:
             self.notify(e.message, severity="error")
             return
+        self.sessions[session["id"]] = session
         await self.open_session(session, replay=True)
 
     def action_close_tab(self) -> None:
@@ -407,6 +519,12 @@ class SleipnirApp(App):
             return
         self.tabs.pop(pane_id, None)
         await tabs.remove_pane(pane_id)
+        if pane_id != "new" and pane_id.startswith("s"):
+            # Closed tabs stay closed until the space is re-selected.
+            sid = int(pane_id[1:])
+            space = self.spaces.get(self.current_space)
+            if space:
+                space.sessions = [s for s in space.sessions if s["id"] != sid]
         self.query_one("#prompt", Input).focus()
 
     def set_tab_title(self, pane_id: str, title: str) -> None:
@@ -419,13 +537,15 @@ class SleipnirApp(App):
         self.run_worker(self.new_tab(), exclusive=False)
 
     async def new_tab(self) -> None:
-        """An empty tab: the next line typed into it starts a session here."""
+        """An empty tab in this space: the next line typed into it starts a session."""
         tabs = self.query_one("#tabs", TabbedContent)
         if "new" not in self.tabs:
-            self.tabs["new"] = Tab(session_id=0, agent_id=self.agent_id or 0, key="")
+            self.tabs["new"] = Tab(session_id=0, agent_id=self.agent_id or 0, key="", loaded=True)
             log = RichLog(wrap=True, markup=True, highlight=False, id="log-new")
             await tabs.add_pane(TabPane("new", log, id="new"))
-            log.write(f"[dim]a new session in {self.root.name}; type to start it[/dim]")
+            space = self.spaces.get(self.current_space)
+            where = space.name if space else self.root.name
+            log.write(f"[dim]a new session in {where}; type to start it[/dim]")
         tabs.active = "new"
         self.query_one("#prompt", Input).focus()
 

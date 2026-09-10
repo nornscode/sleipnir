@@ -70,3 +70,21 @@ def test_permission_prompt_from_the_workers_request():
     # A free-form question stays a question.
     assert question_lines("Which branch should I use?") == ["", "[yellow b]? Which branch should I use?[/]"]
     assert expand_answer("a") == "always" and expand_answer("Y") == "yes" and expand_answer("use main") == "use main"
+
+
+def test_run_event_lines_replays_a_run_in_flight():
+    from sleipnir.render import run_event_lines
+
+    events = [
+        {"event_type": "run_started", "payload": {}},
+        {"event_type": "llm_response", "payload": {"content": "old", "tool_calls": []}},
+        {"event_type": "context_compacted", "payload": {"dropped": 3}},
+        {"event_type": "llm_response", "payload": {"content": "", "tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}]}},
+        {"event_type": "tool_result", "payload": {"name": "bash", "content": "exit code: 0"}},
+        {"event_type": "run_failed", "payload": {"error": "boom", "error_class": "x"}},
+    ]
+    assert run_event_lines(events) == [
+        "[cyan]⚙ bash[/] ls",
+        "  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]",
+        "[red]✗ boom[/red]",
+    ]

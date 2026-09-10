@@ -21,7 +21,16 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
-from sleipnir.render import event_lines, expand_answer, message_lines, permission_details, space_label, text_of, title_of
+from sleipnir.render import (
+    event_lines,
+    expand_answer,
+    message_lines,
+    permission_details,
+    run_event_lines,
+    space_label,
+    text_of,
+    title_of,
+)
 from sleipnir.stream import AgentStream
 
 logger = logging.getLogger("sleipnir.app")
@@ -329,11 +338,28 @@ class SleipnirApp(App):
             self._learn_permission(tab, msg.get("name"), msg.get("content"))
             self.log_lines(tab, message_lines(msg, tab.permissions))
         run = full.get("run") or {}
+        if run.get("status") in ("pending", "running", "waiting") and run.get("id"):
+            # The run in flight is not on the conversation row yet: its own
+            # log is the rest of the history.
+            await self._replay_run(tab, run)
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
-            # The question is the last thing in the history (the assistant's
-            # ask_human call); it stays pending in the prompt.
             tab.question = run["waiting_for"]["question"]
         self._update_prompt()
+
+    async def _replay_run(self, tab: Tab, run: dict) -> None:
+        try:
+            events = await self.api.run_events(run["id"])
+        except Exception as e:
+            self.log_line(tab, f"[red]could not load the run in progress: {e}[/red]")
+            return
+        message = text_of((run.get("input") or {}).get("user_message")).strip()
+        if message and run.get("trigger_type") != "fork":
+            self.log_lines(tab, ["", f"[b green]›[/] {message}"])
+        for e in events:
+            if e.get("event_type") == "tool_result":
+                payload = e.get("payload") or {}
+                self._learn_permission(tab, payload.get("name"), payload.get("content"))
+        self.log_lines(tab, run_event_lines(events, tab.permissions))
 
     def _learn_permission(self, tab: Tab, name, content) -> None:
         if name in ("bash", "write_file", "edit_file") and isinstance(content, str):

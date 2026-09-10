@@ -17,7 +17,8 @@ class FakeApi:
         self.calls = []
         self.session_list = [
             {"id": 2, "key": "run_2", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "waiting",
-             "first_message": "add a flag", "run": {"id": 12, "status": "waiting", "waiting_for": {"question": "Allow bash `rm`?"}}},
+             "first_message": None, "run": {"id": 12, "status": "waiting", "trigger_type": "message", "input": {"user_message": "add a flag"},
+                                            "waiting_for": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}}},
             {"id": 1, "key": "run_1", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "idle",
              "first_message": "fix the tests", "run": {"id": 9, "status": "completed", "waiting_for": None}},
             {"id": 7, "key": "run_7", "agent_id": 8, "agent_name": "my-agent", "gard_id": None, "status": "idle",
@@ -31,12 +32,7 @@ class FakeApi:
         s = next(s for s in self.session_list if s["id"] == session_id)
         messages = [{"role": "user", "content": s["first_message"]}, {"role": "assistant", "content": "on it"}]
         if session_id == 2:
-            messages += [
-                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "name": "bash", "arguments": {"command": "rm -rf build"}}]},
-                {"role": "tool", "tool_call_id": "c1", "name": "bash", "is_error": True,
-                 "content": "permission required (token p-ab12cd)\nbash: rm -rf build\n\nAsk the user."},
-                {"role": "assistant", "content": "", "tool_calls": [{"id": "c2", "name": "ask_human", "arguments": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}}]},
-            ]
+            messages = []
         return {**s, "messages": messages}
 
     async def agents(self):
@@ -58,6 +54,17 @@ class FakeApi:
 
     async def run(self, run_id):
         return {"id": run_id, "conversation_id": 1}
+
+    async def run_events(self, run_id):
+        return [
+            {"event_type": "run_started", "payload": {}},
+            {"event_type": "llm_request", "payload": {"messages": []}},
+            {"event_type": "llm_response", "payload": {"content": "Looking.", "tool_calls": [{"id": "c1", "name": "bash", "arguments": {"command": "rm -rf build"}}], "step": 1}},
+            {"event_type": "tool_call", "payload": {"tool_call_id": "c1", "name": "bash"}},
+            {"event_type": "tool_result", "payload": {"tool_call_id": "c1", "name": "bash", "is_error": True,
+                                                       "content": "permission required (token p-ab12cd)\nbash: rm -rf build\n\nAsk the user."}},
+            {"event_type": "waiting_for_user", "payload": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}},
+        ]
 
     async def delete_session(self, agent_id, key):
         self.calls.append(("delete", agent_id, key))
@@ -107,10 +114,12 @@ async def test_spaces_tabs_send_reply_and_fork():
         assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
         assert tabs.active == "s2"
         assert app.stream.joined == [5]
-        assert app.tabs["s2"].question == "Allow bash `rm`?"
+        assert app.tabs["s2"].question.startswith("Allow bash `rm -rf build`")
         log2 = app.query_one("#log-2", RichLog)
-        assert "add a flag" in log_text(log2)
-        # The permission request renders as a prompt, without the token.
+        # The run in flight is replayed from its log: the message, the model's
+        # turn, and the permission request as a prompt, without the token.
+        assert "add a flag" in log_text(log2) and "Looking." in log_text(log2)
+        assert app.tabs["s2"].title == "add a flag"
         assert "bash wants to run" in log_text(log2) and "rm -rf build" in log_text(log2)
         assert "p-ab12cd" not in log_text(log2)
         assert app.query_one("#prompt", Input).placeholder.startswith("y / a / n")

@@ -53,6 +53,9 @@ def title_of(session: dict) -> str:
     first = text_of(session.get("first_message")).strip().splitlines()
     if not first:
         first = text_of(session.get("summary")).strip().splitlines()
+    if not first:
+        # A run still in flight has not been written to the conversation yet.
+        first = text_of(((session.get("run") or {}).get("input") or {}).get("user_message")).strip().splitlines()
     title = first[0] if first else session.get("key") or f"session {session.get('id')}"
     return title if len(title) <= 48 else title[:47] + "…"
 
@@ -200,6 +203,27 @@ def tool_result_lines(name: str, content: str, kind: str | None = None, is_error
     marker = "[red]↳[/]" if is_error else "[dim]↳[/dim]"
     label = f"{escape(name)}: " if name else ""
     return [f"  {marker} [dim]{label}{escape(first_line(content))}[/dim]"]
+
+
+RUN_EVENT_NAMES = {"run_completed": "completed", "run_failed": "error"}
+RUN_EVENTS_SHOWN = {"llm_response", "tool_result", "waiting_for_user", "context_compacted", "run_completed", "run_failed"}
+
+
+def run_event_lines(events: list[dict], known: dict[str, tuple[str, str]] | None = None) -> list[str]:
+    """The chat lines of a run's event log: what the conversation row will
+    hold once the run finishes. After a compaction only the events since
+    it count, because the compacted history is already on the row."""
+    last_compaction = max((i for i, e in enumerate(events) if e.get("event_type") == "context_compacted"), default=-1)
+    lines: list[str] = []
+    for e in events[last_compaction + 1 :]:
+        kind = e.get("event_type", "")
+        if kind not in RUN_EVENTS_SHOWN:
+            continue
+        payload = e.get("payload") or {}
+        if kind == "run_failed":
+            payload = {"error": payload.get("error")}
+        lines += event_lines(RUN_EVENT_NAMES.get(kind, kind), payload, known)
+    return lines
 
 
 def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:

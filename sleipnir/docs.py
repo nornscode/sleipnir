@@ -69,4 +69,13 @@ Run these through bash from the repository root:
 
 Config lives in .sleipnir/config and takes effect when the worker
 restarts. A flag or SLEIPNIR_<KEY> in the environment overrides it.
+NORNS_URL, NORNS_API_KEY and the LLM key come from the process
+environment, `--env-file`, the repository's .envrc (through direnv), or
+its .env, in that order.
+Startup loads the repository's approved direnv environment, including
+when --root is used. Define exports in .envrc, or use `dotenv` there to
+load .env. The user must approve .envrc with `direnv allow`; restart the
+worker after environment changes. Project variables reach bash, except
+for the worker credential variables. doctor and config show also load
+direnv; config edits and allow-list commands do not.
 """

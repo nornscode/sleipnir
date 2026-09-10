@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-from sleipnir import __version__, config
+from sleipnir import __version__, config, environment
 from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sleip", description="Sleipnir: the coding harness for Norns")
     parser.add_argument("--version", action="version", version=f"sleipnir {__version__}")
     parser.add_argument("--root", default=".", help="repository root (default: current directory)")
+    parser.add_argument("--env-file", help="extra KEY=VALUE file to load before .envrc/.env")
     sub = parser.add_subparsers(dest="command")
 
     for name, help_text in (
@@ -82,6 +83,24 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         parser.error(f"{root} is not a directory")
 
+    # NORNS_URL, NORNS_API_KEY, ANTHROPIC_API_KEY and friends may live in the
+    # repository: --env-file, then .envrc through direnv, then .env.
+    from sleipnir.env import load_env
+
+    env_file = Path(args.env_file).resolve() if args.env_file else None
+    if env_file is not None and not env_file.is_file():
+        parser.error(f"{env_file} is not a file")
+    loaded_env = load_env(root, env_file)
+
+    if args.command in ("run", "serve", "chat", "doctor") or (
+        args.command == "config" and args.action == "show"
+    ):
+        try:
+            environment.load(root)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
     if args.command in ("run", "serve", "chat"):
         settings = config.resolve(
             root,
@@ -94,12 +113,12 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         return cmd_start(root, settings, mode=args.command, use_gard=not args.no_gard)
+    if args.command == "doctor":
+        return cmd_doctor(root, loaded_env)
     if args.command == "allow":
         return cmd_allow(root, args)
     if args.command == "config":
         return cmd_config(root, args)
-    if args.command == "doctor":
-        return cmd_doctor(root)
     if args.command == "docs":
         print(DOCS, end="")
         return 0
@@ -205,8 +224,11 @@ def cmd_config(root: Path, args) -> int:
     return 0
 
 
-def cmd_doctor(root: Path) -> int:
+def cmd_doctor(root: Path, loaded_env: dict[str, str] | None = None) -> int:
+    from sleipnir.env import env_hint
+
     ok = True
+    loaded_env = loaded_env or {}
 
     def report(good: bool | None, text: str) -> None:
         nonlocal ok
@@ -222,6 +244,16 @@ def cmd_doctor(root: Path) -> int:
     report(True, f"{len(perms.rules)} allow rules in {perms.allow_file}")
     values = config.resolve(root)
     report(True, f"agent {values['agent']}, model {values['model']}, max_steps {values['max_steps']}")
+
+    if loaded_env:
+        by_source: dict[str, list[str]] = {}
+        for k, src in loaded_env.items():
+            by_source.setdefault(src, []).append(k)
+        for src, keys in by_source.items():
+            report(True, f"{src}: {', '.join(sorted(keys))}")
+    hint = env_hint(root)
+    if hint:
+        report(None, hint)
 
     url = os.environ.get("NORNS_URL")
     key = os.environ.get("NORNS_API_KEY")

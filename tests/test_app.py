@@ -82,8 +82,16 @@ async def test_sidebar_open_send_reply_and_fork():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         sidebar = app.query_one("#sidebar", ListView)
-        assert [item.session["id"] for item in sidebar.query(SessionItem)] == [1, 2]
+        items = list(sidebar.query(SessionItem))
+        assert [item.session["id"] for item in items] == [1, 2]
         assert app.agent_id == 5
+
+        # A status change updates the row in place rather than rebuilding the list.
+        api.session_list[0]["status"] = "awaiting_tools"
+        await app.refresh_sessions().wait()
+        await pilot.pause()
+        assert list(sidebar.query(SessionItem))[0] is items[0]
+        assert "running tools" in items[0].markup
 
         # Open the first session: a tab with its history, joined to the agent's events.
         await app.open_session(api.session_list[0])
@@ -101,10 +109,12 @@ async def test_sidebar_open_send_reply_and_fork():
         assert api.calls[-1] == ("send", 5, "run the tests", "run_1", 3)
         assert app.tabs["s1"].run_id == 20
 
-        # A live event for that run lands in the tab.
+        # A live event for that run lands in the tab; the completion does not
+        # repeat what the model just said.
         await app.on_agent_event(5, "llm_response", {"run_id": 20, "content": "Running.", "tool_calls": []})
+        await app.on_agent_event(5, "completed", {"run_id": 20, "output": "Running."})
         await pilot.pause(0.3)
-        assert "Running." in log_text(log)
+        assert log_text(log).count("Running.") == 1 and "✓ done" in log_text(log)
 
         # The parked session: the next line answers the question.
         await app.open_session(api.session_list[1])
@@ -143,3 +153,12 @@ async def test_new_session_starts_from_the_first_line():
         await pilot.pause()
         assert "new" not in app.tabs and "s3" in app.tabs
         assert app.query_one("#tabs", TabbedContent).active == "s3"
+        assert app.tabs["s3"].title == "hello there"
+
+        # A long title is cut for the tab strip, and /close drops the tab.
+        api.session_list[-1]["first_message"] = "x" * 40
+        await app.refresh_sessions().wait()
+        assert app.tabs["s3"].title.endswith("…") and len(app.tabs["s3"].title) == 22
+        await app.command("/close")
+        await pilot.pause()
+        assert "s3" not in app.tabs

@@ -30,6 +30,11 @@ export ANTHROPIC_API_KEY=sk-ant-...
 sleip
 ```
 
+Or keep those in the repository: `sleip` reads `--env-file`, then the
+repository's `.envrc` through `direnv export` (if direnv is installed and
+has allowed it), then its `.env`. A variable the shell already has is
+never overridden.
+
 That opens the session client with this repository's worker running in
 the same process. Down the left: every session across every repository
 and machine connected to your Norns, with its live state (thinking,
@@ -59,6 +64,33 @@ Options: `--root` (repository root, default the current directory),
 `--max-steps` (default 200), `--compact-at` (default 100000) and
 `--keep` (default 40). Every option is also a `SLEIPNIR_<NAME>`
 environment variable or a `.sleipnir/config` setting.
+
+### Repository environment variables
+
+Sleipnir automatically loads [direnv](https://direnv.net/)'s environment
+from the selected repository (including `--root`) before starting the
+client or worker. No shell hook is required. Install direnv, then create
+an `.envrc` in your repository:
+
+```bash
+export NORNS_URL=http://localhost:4000
+export NORNS_API_KEY=nrn_...
+export ANTHROPIC_API_KEY=sk-ant-...
+export DATABASE_URL=postgres://localhost/myapp
+```
+
+Run `direnv allow` in that repository, then `sleip`. To use a `.env`
+file instead, put `dotenv` in `.envrc`; you can copy `.env.example` to
+`.env` and fill it in. Keep files containing secrets out of git.
+
+Direnv's exported values and unsets apply to the inherited environment;
+command-line flags still override settings. `sleip doctor` and
+`sleip config show` load the same environment. Restart Sleipnir after
+changing variables, and re-run `direnv allow` if `.envrc` changes.
+An unapproved or failing `.envrc` stops startup with an error.
+Shell tools inherit project variables, with the worker's credential
+variables still removed. Without direnv or an `.envrc`, the inherited
+environment works as before.
 
 ### Spaces are gards
 

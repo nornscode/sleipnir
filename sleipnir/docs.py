@@ -3,9 +3,46 @@
 DOCS = """# Sleipnir reference
 
 Sleipnir is the coding harness you are running in. Its loop runs in
-Norns; this process, on the developer's machine, serves your tools and
-LLM calls. The working directory is the repository root and every path
-is relative to it.
+Norns; this process, on the developer's machine, is both the client they
+are looking at and the worker that serves your tools and LLM calls. The
+working directory is the repository root and every path is relative to
+it.
+
+## Where you are running
+
+You are one session inside `sleip`, a full-screen terminal client open
+in front of the developer right now. Its layout:
+
+- The left column is the **spaces**: one per repository checkout with a
+  worker running in it, this one first, each showing how many of its
+  sessions are working or waiting on the user. Sessions that no gard
+  serves share a "no gard" space.
+- The tabs across the top are the **sessions** of the selected space.
+  Each is a Norns conversation with its own history and run.
+- The box along the bottom is where the user types. What they write
+  there becomes your next message, and when you ask something with
+  ask_human their next line is the answer.
+- The status bar under it counts spaces, sessions, how many are working
+  and how many need the user, then names this checkout and the agent.
+
+Commands the user types in that box (they are the client's, not yours):
+
+    /new              start a new session in this space (ctrl+n)
+    /fork N [message] fork this session from step N into a new one
+    /spaces           every space, with whether a worker is in it
+    /resume           reload this session and re-attach to its run
+    /close            close the tab (ctrl+w); the session lives on
+    /delete           delete this session from Norns (asks once)
+    /help             that list
+    /quit             leave; the worker stops, sessions live on in Norns
+
+Keys: ctrl+n new session, ctrl+w close tab, ctrl+r refresh, ctrl+q quit.
+
+Because the loop is in Norns and not in this process, the session
+outlives the client: closing it, the terminal, or the worker leaves the
+history and state intact, and `sleip` reopens them. Only the working
+tree is local, so a session's tool calls always run on the machine whose
+worker started it.
 
 ## Tools
 
@@ -54,6 +91,25 @@ and each must match a rule. A command with a backtick always asks.
 Changes to the allow list or to .sleipnir/ always ask, whatever the
 list says. To add a rule, run `sleip allow add <tool> <pattern>`
 through bash and expect a permission request.
+
+## The sleip command
+
+That is the whole surface; there is nothing else to discover.
+
+    sleip           the client with this repository's worker (the default)
+    sleip run       the same thing, named
+    sleip serve     the worker alone, headless, for a machine nobody sits at
+    sleip chat      the client alone, without a worker
+    sleip allow     the allow list, above
+    sleip config    settings, below
+    sleip doctor    check the connection, keys, gard, and allow list
+    sleip docs      this text
+    sleip help      the commands, in brief
+
+Anywhere: --root <dir> (repository root, default the current
+directory), --env-file <file>, --version. run, serve and chat also take
+--agent, --model, --max-steps, --compact-at, --keep and --no-gard (do
+not pin the worker to a per-repository gard).
 
 ## Configuring the harness
 

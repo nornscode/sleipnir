@@ -148,6 +148,7 @@ sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
 sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
 sleip doctor      # connection, keys, gard, allow list
 sleip docs        # the reference the agent reads
+sleip help        # the commands, in brief
 ```
 
 Settings live in `.sleipnir/config` and take effect when the worker

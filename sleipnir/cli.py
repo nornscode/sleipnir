@@ -22,7 +22,7 @@ from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
 
-SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs"}
+SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs", "help"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="check the environment and configuration")
     sub.add_parser("docs", help="print the reference the agent reads")
+    sub.add_parser("help", help="the commands, in brief")
     return parser
 
 
@@ -121,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_config(root, args)
     if args.command == "docs":
         print(DOCS, end="")
+        return 0
+    if args.command == "help":
+        parser.print_help()
         return 0
     return 0
 

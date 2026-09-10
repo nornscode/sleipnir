@@ -88,3 +88,14 @@ def test_run_event_lines_replays_a_run_in_flight():
         "  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]",
         "[red]✗ boom[/red]",
     ]
+
+
+def test_spaces_lines():
+    from sleipnir.render import spaces_lines
+
+    gards = [{"id": 3, "name": "laptop", "status": "ready"}, {"id": 4, "name": "server", "status": "disconnected"}]
+    sessions = [{"gard_id": 3, "status": "awaiting_llm", "run": {}}, {"gard_id": None, "status": "idle", "run": {"status": "waiting"}}]
+    lines = spaces_lines(gards, sessions, here=3)
+    assert "laptop" in lines[2] and "worker connected" in lines[2] and "1 session, 1 working" in lines[2] and "this checkout" in lines[2]
+    assert "server" in lines[3] and "worker gone" in lines[3] and "0 sessions" in lines[3]
+    assert "no gard" in lines[4] and "1 session" in lines[4]

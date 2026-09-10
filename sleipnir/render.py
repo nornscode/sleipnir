@@ -99,6 +99,39 @@ def space_label(name: str, sessions: list[dict]) -> str:
     return f"[{colour}]{glyph}[/] [b]{escape(name)}[/b]\n  [dim]{' · '.join(parts)}[/dim]"
 
 
+GARD_STATE = {
+    "ready": ("●", "green", "worker connected"),
+    "pending": ("○", "dim", "no worker yet"),
+    "disconnected": ("○", "red", "worker gone"),
+    "destroyed": ("✗", "red", "destroyed"),
+}
+
+
+def spaces_lines(gards: list[dict], sessions: list[dict], here: int | None) -> list[str]:
+    """`/spaces`: every gard with whether a worker is in it, and its sessions."""
+    by_gard: dict[int, list[dict]] = {}
+    for s in sessions:
+        by_gard.setdefault(s.get("gard_id") or 0, []).append(s)
+    lines = ["", "[b]spaces[/b]  (a space is a checkout with `sleip` running in it)"]
+    for g in sorted(gards, key=lambda g: (g["id"] != here, g.get("status") != "ready", g.get("name") or "")):
+        glyph, colour, word = GARD_STATE.get(g.get("status"), ("?", "dim", g.get("status") or "?"))
+        own = by_gard.get(g["id"], [])
+        working = sum(1 for s in own if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
+        waiting = sum(1 for s in own if (s.get("run") or {}).get("status") == "waiting")
+        counts = f"{len(own)} session{'s' if len(own) != 1 else ''}"
+        if working:
+            counts += f", {working} working"
+        if waiting:
+            counts += f", {waiting} need you"
+        mark = "  [dim]← this checkout[/dim]" if g["id"] == here else ""
+        lines.append(f"  [{colour}]{glyph}[/] [b]{escape(g.get('name') or str(g['id']))}[/b]  [dim]{word} · {counts}[/dim]{mark}")
+    loose = by_gard.get(0, [])
+    if loose:
+        lines.append(f"  [dim]○[/] [b]no gard[/b]  [dim]{len(loose)} session{'s' if len(loose) != 1 else ''} served by any worker without a gard[/dim]")
+    lines.append("[dim]  start a space: run `sleip` in another repository (or `sleip serve` on another machine)[/dim]")
+    return lines
+
+
 def tool_summary(name: str, arguments: Any) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     if name == "bash":

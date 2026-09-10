@@ -40,7 +40,7 @@ class FakeApi:
         return [{"id": 5, "name": "sleipnir"}, {"id": 8, "name": "my-agent"}]
 
     async def gards(self):
-        return [{"id": 3, "name": "laptop"}]
+        return [{"id": 3, "name": "laptop", "status": "ready"}]
 
     async def send_message(self, agent_id, content, *, conversation_key=None, gard_id=None):
         self.calls.append(("send", agent_id, content, conversation_key, gard_id))
@@ -160,6 +160,11 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause()
         assert list(sidebar.query(SpaceItem))[0] is items[0]
         assert "1 working" in items[0].markup
+
+        # /spaces lists the gards with whether a worker is in them.
+        await app.command("/spaces")
+        await pilot.pause(0.3)
+        assert "laptop" in log_text(app.query_one("#log-1", RichLog)) and "worker connected" in log_text(app.query_one("#log-1", RichLog))
 
         # /fork on the current run opens the fork's session.
         await app.command("/fork 3 try again")

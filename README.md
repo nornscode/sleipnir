@@ -44,6 +44,7 @@ asks a question, your next line is the answer.
 
 ```
 /new              start a new session in this space (ctrl+n)
+/spaces           every space, with whether a worker is in it
 /close            close the current tab (ctrl+w); the session lives on
 /delete           delete the current session from Norns (asks once)
 /fork N [message] fork the current session from step N into a new one

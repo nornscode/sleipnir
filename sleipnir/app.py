@@ -31,6 +31,7 @@ from sleipnir.render import (
     permission_in_question,
     run_event_lines,
     space_label,
+    spaces_lines,
     text_of,
     title_of,
 )
@@ -46,6 +47,7 @@ Type to talk to the session you are in; when the agent asks a question, your nex
 
   /new              start a new session in this space (ctrl+n)
   /fork N [message] fork the current session from step N into a new one
+  /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
   /close            close the current tab (ctrl+w); the session lives on
   /delete           delete the current session from Norns (asks once)
@@ -555,6 +557,13 @@ class SleipnirApp(App):
             self.log_line(tab, HELP)
         elif cmd == "/new":
             await self.new_tab()
+        elif cmd == "/spaces":
+            try:
+                gards = await self.api.gards()
+            except ApiError as e:
+                self.notify(e.message, severity="error")
+                return
+            self.log_lines(tab, spaces_lines(gards, list(self.sessions.values()), self.gard_id))
         elif cmd == "/resume":
             if tab is None:
                 self.notify("no session open")

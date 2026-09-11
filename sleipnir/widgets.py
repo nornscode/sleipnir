@@ -7,6 +7,7 @@ from rich.markup import escape
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -69,3 +70,61 @@ class PermissionPrompt(Vertical):
 
     def action_type_reply(self) -> None:
         self.post_message(self.TypeReply())
+
+
+class ConfirmClose(ModalScreen[bool]):
+    """Closing a space stops its worker on machines you are not looking at,
+    so it asks in front of everything, and the safe answer is the one under
+    the cursor."""
+
+    DEFAULT_CSS = """
+    ConfirmClose { align: center middle; background: $background 60%; }
+    ConfirmClose > Vertical {
+        width: 64; height: auto; padding: 1 2; background: $surface; border: round $error;
+    }
+    ConfirmClose #confirm-title { height: auto; }
+    ConfirmClose OptionList { height: auto; border: none; padding: 0; margin: 1 0 0 0; background: transparent; }
+    ConfirmClose #confirm-hint { height: 1; color: $text-muted; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, name: str, sessions: int, here: bool) -> None:
+        super().__init__()
+        self.space_name = name
+        self.sessions = sessions
+        self.here = here
+
+    def compose(self):
+        with Vertical():
+            what = [f"Close [b]{escape(self.space_name)}[/b]?"]
+            what.append("Its worker stops wherever it is running, and the space")
+            what.append("leaves every client — not just this one.")
+            if self.sessions:
+                s = "" if self.sessions == 1 else "s"
+                what.append(
+                    f"Its {self.sessions} session{s} stay in Norns, but nothing can serve"
+                )
+                what.append("them again.")
+            if self.here:
+                what.append("This is this checkout's own space; sleip needs a restart")
+                what.append("afterwards for a new one.")
+            yield Static("\n".join(what), id="confirm-title", markup=True)
+            yield OptionList(
+                Option("Keep it", id="cancel"),
+                Option("Close the space", id="close"),
+                id="confirm-options",
+            )
+            yield Static("[dim]↑↓ enter · esc to keep it[/dim]", id="confirm-hint", markup=True)
+
+    def on_mount(self) -> None:
+        options = self.query_one(OptionList)
+        options.highlighted = 0  # "Keep it": enter alone never closes a space
+        options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(str(event.option.id) == "close")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)

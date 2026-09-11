@@ -25,14 +25,16 @@ in front of the developer right now. Its layout:
   `sleip`. It then appears in every client's sidebar (ctrl+r to
   refresh one that is already open). `/new` starts a new session in
   the space you are already in, which is a different thing.
-- Closing a space is `/close-space`, and it is the opposite of starting
+- Closing a space is `/close-space` or ctrl+g, and it is the opposite of starting
   one: it destroys the gard, so Norns stops that gard's worker wherever
   it runs — this machine or another — and the space disappears from
   every client. `/quit` does not do this; it stops the worker in front
   of you and leaves the space, which is why it is still there next
   time. Sessions in a closed space stay in Norns but nothing can serve
   them again, because only a worker claiming that gard could, and the
-  gard is gone. `/close-space force` closes one with a run still going.
+  gard is gone. Either way it asks first, in a screen of its own, with
+  "Keep it" under the cursor so enter alone never closes a space.
+  `/close-space force` closes one with a run still going.
 - The key is the path, not the repository: a git worktree is a
   checkout of its own, so two worktrees of one repository are two
   spaces with two working trees, and a subdirectory started in by
@@ -53,11 +55,12 @@ Commands the user types in that box (they are the client's, not yours):
     /resume           reload this session and re-attach to its run
     /close            close the tab (ctrl+w); the session lives on
     /delete           delete this session from Norns (asks once)
-    /close-space      close this space everywhere (asks once)
+    /close-space      close this space everywhere (ctrl+g)
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns
 
-Keys: ctrl+n new session, ctrl+w close tab, ctrl+r refresh, ctrl+q quit.
+Keys: ctrl+n new session, ctrl+w close tab, ctrl+g close space,
+ctrl+r refresh, ctrl+q quit.
 
 Because the loop is in Norns and not in this process, the session
 outlives the client: closing it, the terminal, or the worker leaves the

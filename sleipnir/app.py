@@ -36,7 +36,7 @@ from sleipnir.render import (
     title_of,
 )
 from sleipnir.stream import AgentStream
-from sleipnir.widgets import PermissionPrompt
+from sleipnir.widgets import ConfirmClose, PermissionPrompt
 
 logger = logging.getLogger("sleipnir.app")
 
@@ -51,12 +51,12 @@ Type to talk to the session you are in; when the agent asks a question, your nex
   /resume           reload the current session and re-attach to its run
   /close            close the current tab (ctrl+w); the session lives on
   /delete           delete the current session from Norns (asks once)
-  /close-space      close this space everywhere: destroys its gard and
-                    stops its worker on every machine (asks once)
+  /close-space      close this space everywhere (ctrl+g): destroys its
+                    gard and stops its worker on every machine
   /help             this text
   /quit             leave (the worker stops with you; sessions live on in Norns)
 
-Keys: ctrl+n new session · ctrl+w close tab · ctrl+r refresh · ctrl+q quit"""
+Keys: ctrl+n new session · ctrl+w close tab · ctrl+g close space · ctrl+r refresh · ctrl+q quit"""
 
 
 @dataclass
@@ -116,6 +116,8 @@ class SleipnirApp(App):
         Binding("ctrl+n", "new_session", "New"),
         Binding("ctrl+w", "close_tab", "Close"),
         Binding("ctrl+r", "refresh", "Refresh"),
+        # Not ctrl+x / ctrl+k / ctrl+w: the prompt edits with those.
+        Binding("ctrl+g", "close_space", "Close space"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -148,13 +150,9 @@ class SleipnirApp(App):
         # Gards destroyed since we last looked: no worker can ever
         # claim one again, so neither it nor its sessions are reachable.
         self.closed_gards: set[int] = set()
-        # Gard ids we have already re-fetched for, so an unnamed or
-        # destroyed gard cannot make us refetch on every poll.
-        self._asked_gards: set[int] = set()
         self.agent_id: int | None = None
         self._pending_key: str | None = None
         self._pending_text: str | None = None
-        self._close_space_armed: tuple[int, float] | None = None
         self._delete_armed: tuple[str, float] | None = None
 
     # -- layout -------------------------------------------------------------
@@ -193,15 +191,12 @@ class SleipnirApp(App):
     async def refresh_sessions(self) -> None:
         try:
             sessions = await self.api.sessions()
-            # Spaces appear while we are running: a gard whose name we have
-            # never seen means the list is stale, not that it has no name.
-            unnamed = {
-                gid for s in sessions
-                if (gid := s.get("gard_id")) and gid not in self.gard_names
-            } - self._asked_gards
-            if self.agent_id is None or not self.gard_names or unnamed:
-                self._asked_gards |= unnamed
-                await self._learn_agent_and_gards()
+            # Every poll, because spaces open and close on machines we are
+            # not looking at: one closed elsewhere has to leave this sidebar
+            # too, and one created elsewhere arrives with its name.
+            await self._learn_gards()
+            if self.agent_id is None:
+                await self._learn_agents()
         except Exception as e:
             self.set_status(f"cannot reach Norns: {e}")
             return
@@ -269,18 +264,24 @@ class SleipnirApp(App):
                 listview.index = i
                 break
 
-    async def _learn_agent_and_gards(self) -> None:
+    async def _learn_agents(self) -> None:
         for a in await self.api.agents():
             if a.get("name") == self.agent_name:
                 self.agent_id = a["id"]
+
+    async def _learn_gards(self) -> None:
         try:
             gards = await self.api.gards()
-            self.gard_names = {g["id"]: g.get("name") or str(g["id"]) for g in gards}
-            # Destroy is a soft delete: the row stays, so without this a
-            # closed space would sit in the sidebar forever.
-            self.closed_gards = {g["id"] for g in gards if g.get("status") == "destroyed"}
         except ApiError:
-            self.gard_names = {}
+            return  # keep what we know rather than blanking the sidebar
+        self.gard_names = {g["id"]: g.get("name") or str(g["id"]) for g in gards}
+        # Destroy is a soft delete: the row stays with status "destroyed",
+        # so a closed space would otherwise sit in every other client.
+        self.closed_gards = {g["id"] for g in gards if g.get("status") == "destroyed"}
+
+    async def _learn_agent_and_gards(self) -> None:
+        await self._learn_agents()
+        await self._learn_gards()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if isinstance(event.item, SpaceItem):
@@ -602,7 +603,7 @@ class SleipnirApp(App):
         elif cmd == "/delete":
             await self.delete_active_session()
         elif cmd in ("/close-space", "/close_space"):
-            await self.close_space(force="force" in args)
+            self.ask_close_space(force="force" in args)
         elif cmd == "/fork":
             if tab is None or tab.run_id is None:
                 self.notify("open a session with a run first", severity="warning")
@@ -654,27 +655,27 @@ class SleipnirApp(App):
         self.notify(f"deleted “{tab.title}”")
         self.refresh_sessions()
 
-    async def close_space(self, *, force: bool = False) -> None:
-        """Destroy this space's gard. Norns kicks every worker claiming it,
-        on this machine and any other, so the space closes everywhere."""
+    def action_close_space(self) -> None:
+        self.ask_close_space()
+
+    def ask_close_space(self, *, force: bool = False) -> None:
+        """Closing a space reaches machines the user cannot see, so it asks
+        in a screen of its own rather than in a line of the log."""
         gid = self.current_space
         if gid is None or gid == NO_GARD:
             self.notify("that is not a space you can close", severity="warning")
             return
         name = self.gard_names.get(gid, f"gard {gid}")
         count = len(self.spaces[gid].sessions) if gid in self.spaces else 0
-        armed = self._close_space_armed
-        if not armed or armed[0] != gid or time.monotonic() - armed[1] > 10:
-            self._close_space_armed = (gid, time.monotonic())
-            here = " this checkout's own space," if gid == self.gard_id else ""
-            sessions = f" its {count} session{'s' if count != 1 else ''} stay in Norns but nothing can serve them." if count else ""
-            self.notify(
-                f"close “{name}”?{here} its worker stops wherever it runs.{sessions}"
-                " type /close-space again to confirm",
-                severity="warning",
-            )
-            return
-        self._close_space_armed = None
+        self.push_screen(
+            ConfirmClose(name, count, gid == self.gard_id),
+            lambda confirmed: self.close_space(gid, name, force=force) if confirmed else None,
+        )
+
+    @work(group="close-space")
+    async def close_space(self, gid: int, name: str, *, force: bool = False) -> None:
+        """Destroy the space's gard. Norns kicks every worker claiming it,
+        on this machine and any other, so it closes everywhere."""
         try:
             await self.api.destroy_gard(gid, force=force)
         except ApiError as e:
@@ -688,7 +689,7 @@ class SleipnirApp(App):
 
         gard_store.forget(gid)
         self.closed_gards.add(gid)
-        self.sessions = {i: s for i, s in self.sessions.items() if (s.get("gard_id") or NO_GARD) != gid}
+        self.sessions = {i: x for i, x in self.sessions.items() if (x.get("gard_id") or NO_GARD) != gid}
         self.spaces = self._group_spaces(list(self.sessions.values()))
         self.current_space = next(iter(self.spaces), None)
         await self._render_sidebar()

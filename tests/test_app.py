@@ -276,12 +276,13 @@ async def test_a_gard_first_seen_later_is_named():
 
 
 @pytest.mark.asyncio
-async def test_close_space_asks_then_destroys_the_gard(isolated_home):
+async def test_close_space_confirms_then_destroys_the_gard(isolated_home):
     """Closing a space destroys its gard — Norns kicks its workers — and
     forgets it locally so the next `sleip` there starts a new one."""
     from sleipnir import gard as gard_store
+    from sleipnir.widgets import ConfirmClose
 
-    (isolated_home).mkdir(parents=True, exist_ok=True)
+    isolated_home.mkdir(parents=True, exist_ok=True)
     gard_store._save({"http://norns.test|/tmp/repo": {"id": 3, "claim_token": "t", "name": "laptop"}})
 
     app, api = make_app()
@@ -289,16 +290,38 @@ async def test_close_space_asks_then_destroys_the_gard(isolated_home):
         await pilot.pause(0.3)
         assert app.current_space == 3
 
-        # The first /close-space only arms it.
-        await app.command("/close-space")
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmClose)
+        # "Keep it" is under the cursor, so enter alone never closes a space.
+        await pilot.press("enter")
+        await pilot.pause(0.3)
         assert not [c for c in api.calls if c[0] == "destroy_gard"]
         assert 3 in app.spaces
 
-        await app.command("/close-space")
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.3)
+        await pilot.press("down", "enter")
         await pilot.pause(0.3)
         assert ("destroy_gard", 3, False) in api.calls
-        assert 3 not in app.spaces          # gone from the sidebar
+        assert 3 not in app.spaces
         assert gard_store.stored("http://norns.test", Path("/tmp/repo")) is None
+
+
+@pytest.mark.asyncio
+async def test_close_space_can_be_escaped(isolated_home):
+    from sleipnir.widgets import ConfirmClose
+
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("ctrl+g")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmClose)
+        await pilot.press("escape")
+        await pilot.pause(0.3)
+        assert not [c for c in api.calls if c[0] == "destroy_gard"]
+        assert 3 in app.spaces
 
 
 @pytest.mark.asyncio
@@ -308,11 +331,13 @@ async def test_close_space_needs_force_while_a_run_is_going(isolated_home):
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
         await app.command("/close-space")
-        await app.command("/close-space")
+        await pilot.pause(0.3)
+        await pilot.press("down", "enter")
         await pilot.pause(0.3)
         assert 3 in app.spaces              # refused, so still there
         await app.command("/close-space force")
-        await app.command("/close-space force")
+        await pilot.pause(0.3)
+        await pilot.press("down", "enter")
         await pilot.pause(0.3)
         assert ("destroy_gard", 3, True) in api.calls
         assert 3 not in app.spaces
@@ -326,8 +351,9 @@ async def test_a_gard_closed_elsewhere_disappears():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
         assert 3 in app.spaces and app.spaces[3].sessions
+        # Another instance closed it. Nothing tells this client but the
+        # next poll, so the poll is what has to notice.
         api.gard_list[0]["status"] = "destroyed"
-        app.gard_names = {}                 # force the re-fetch a poll would do
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert 3 not in app.spaces

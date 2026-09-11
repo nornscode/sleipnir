@@ -68,11 +68,27 @@ def run_worker(root: Path, settings: dict[str, str], gard: dict | None = None) -
     harness.run(agent, **gard_kwargs(gard))
 
 
-def worker_thread(harness: Harness, agent: Agent, gard: dict | None) -> threading.Thread:
-    """The same worker, in a background thread beside the session client."""
-    return threading.Thread(
-        target=harness.run, args=(agent,), kwargs=gard_kwargs(gard), name="sleipnir-worker", daemon=True
-    )
+def worker_thread(
+    harness: Harness, agent: Agent, gard: dict | None, on_stop=None
+) -> threading.Thread:
+    """The same worker, in a background thread beside the session client.
+
+    on_stop is called with the exception that ended it, if any: a gard
+    closed from another machine kicks this worker, and the client is the
+    only thing that can say so.
+    """
+
+    def serve() -> None:
+        error = None
+        try:
+            harness.run(agent, **gard_kwargs(gard))
+        except BaseException as e:  # noqa: BLE001 — reported, not swallowed
+            error = e
+            logger.error(f"worker stopped: {e}")
+        if on_stop is not None:
+            on_stop(error)
+
+    return threading.Thread(target=serve, name="sleipnir-worker", daemon=True)
 
 
 def gard_kwargs(gard: dict | None) -> dict:

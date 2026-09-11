@@ -35,6 +35,16 @@ def stored(url: str, root: Path) -> dict | None:
     return _load().get(f"{url.rstrip('/')}|{root}")
 
 
+def forget(gard_id: int) -> None:
+    """Drop a destroyed gard from the store, whatever checkout it was for,
+    so the next `sleip` there creates a new one instead of claiming a
+    gard that no longer exists."""
+    data = _load()
+    for key in [k for k, v in data.items() if str(v.get("id")) == str(gard_id)]:
+        data.pop(key)
+    _save(data)
+
+
 async def ensure_gard(api: NornsApi, root: Path) -> dict:
     """The gard for this repository on this server: from the environment,
     the store, or freshly created and stored."""

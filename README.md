@@ -63,6 +63,8 @@ asks a question, your next line is the answer.
 /spaces           every space, with whether a worker is in it
 /close            close the current tab (ctrl+w); the session lives on
 /delete           delete the current session from Norns (asks once)
+/close-space      close this space everywhere: destroy its gard, stop its
+                  worker on every machine (asks once; `force` if busy)
 /fork N [message] fork the current session from step N into a new one
 /resume           reload the current session and re-attach to its run
 /help             the commands
@@ -118,7 +120,10 @@ this checkout only ever reach the worker running in it, and every gard
 is a space in the sidebar. Sessions no gard serves share a "no gard"
 space. The gard's
 claim token is kept in `~/.sleipnir/gards.json`, never in the
-repository. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
+repository. `/close-space` closes one again: it destroys the gard, so
+Norns stops that gard's worker wherever it is running and the space
+leaves every client's sidebar. `/quit` does not — it stops the worker in
+front of you and leaves the space for next time. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
 `--no-gard` turns it off, in which case the worker serves any run that
 has no gard.
 

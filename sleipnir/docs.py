@@ -25,6 +25,14 @@ in front of the developer right now. Its layout:
   `sleip`. It then appears in every client's sidebar (ctrl+r to
   refresh one that is already open). `/new` starts a new session in
   the space you are already in, which is a different thing.
+- Closing a space is `/close-space`, and it is the opposite of starting
+  one: it destroys the gard, so Norns stops that gard's worker wherever
+  it runs — this machine or another — and the space disappears from
+  every client. `/quit` does not do this; it stops the worker in front
+  of you and leaves the space, which is why it is still there next
+  time. Sessions in a closed space stay in Norns but nothing can serve
+  them again, because only a worker claiming that gard could, and the
+  gard is gone. `/close-space force` closes one with a run still going.
 - The key is the path, not the repository: a git worktree is a
   checkout of its own, so two worktrees of one repository are two
   spaces with two working trees, and a subdirectory started in by
@@ -45,6 +53,7 @@ Commands the user types in that box (they are the client's, not yours):
     /resume           reload this session and re-attach to its run
     /close            close the tab (ctrl+w); the session lives on
     /delete           delete this session from Norns (asks once)
+    /close-space      close this space everywhere (asks once)
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns
 

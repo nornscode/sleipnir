@@ -88,3 +88,9 @@ class NornsApi:
 
     async def create_gard(self, name: str) -> dict:
         return await self._request("POST", "/gards", json={"name": name})
+
+    async def destroy_gard(self, gard_id: int, *, force: bool = False) -> None:
+        """Destroy a gard. Norns kicks every worker claiming it, wherever
+        it runs. 409 unless force when a run is still going."""
+        path = f"/gards/{gard_id}"
+        return await self._request("DELETE", path, params={"force": "true"} if force else None)

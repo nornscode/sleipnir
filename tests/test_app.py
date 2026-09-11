@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from textual.widgets import Input, ListView, RichLog, TabbedContent
 
+from sleipnir.api import ApiError
 from sleipnir.app import SleipnirApp, SpaceItem
 from sleipnir.widgets import PermissionPrompt
 
@@ -17,6 +18,7 @@ class FakeApi:
     def __init__(self):
         self.calls = []
         self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"}]
+        self.destroy_conflict = False
         self.session_list = [
             {"id": 2, "key": "run_2", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "waiting",
              "first_message": None, "run": {"id": 12, "status": "waiting", "trigger_type": "message", "input": {"user_message": "add a flag"},
@@ -70,6 +72,14 @@ class FakeApi:
                                                        "content": "permission required (token p-ab12cd)\nbash: rm -rf build\n\nAsk the user."}},
             {"event_type": "waiting_for_user", "payload": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}},
         ]
+
+    async def destroy_gard(self, gard_id, *, force=False):
+        self.calls.append(("destroy_gard", gard_id, force))
+        if self.destroy_conflict and not force:
+            raise ApiError(409, "gard has an active run — pass force=true to destroy anyway")
+        for g in self.gard_list:
+            if g["id"] == gard_id:
+                g["status"] = "destroyed"
 
     async def delete_session(self, agent_id, key):
         self.calls.append(("delete", agent_id, key))
@@ -263,3 +273,61 @@ async def test_a_gard_first_seen_later_is_named():
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert app.spaces[9].name == "missive"
+
+
+@pytest.mark.asyncio
+async def test_close_space_asks_then_destroys_the_gard(isolated_home):
+    """Closing a space destroys its gard — Norns kicks its workers — and
+    forgets it locally so the next `sleip` there starts a new one."""
+    from sleipnir import gard as gard_store
+
+    (isolated_home).mkdir(parents=True, exist_ok=True)
+    gard_store._save({"http://norns.test|/tmp/repo": {"id": 3, "claim_token": "t", "name": "laptop"}})
+
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert app.current_space == 3
+
+        # The first /close-space only arms it.
+        await app.command("/close-space")
+        assert not [c for c in api.calls if c[0] == "destroy_gard"]
+        assert 3 in app.spaces
+
+        await app.command("/close-space")
+        await pilot.pause(0.3)
+        assert ("destroy_gard", 3, False) in api.calls
+        assert 3 not in app.spaces          # gone from the sidebar
+        assert gard_store.stored("http://norns.test", Path("/tmp/repo")) is None
+
+
+@pytest.mark.asyncio
+async def test_close_space_needs_force_while_a_run_is_going(isolated_home):
+    app, api = make_app()
+    api.destroy_conflict = True
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        await app.command("/close-space")
+        await app.command("/close-space")
+        await pilot.pause(0.3)
+        assert 3 in app.spaces              # refused, so still there
+        await app.command("/close-space force")
+        await app.command("/close-space force")
+        await pilot.pause(0.3)
+        assert ("destroy_gard", 3, True) in api.calls
+        assert 3 not in app.spaces
+
+
+@pytest.mark.asyncio
+async def test_a_gard_closed_elsewhere_disappears():
+    """Destroy is a soft delete: the row stays, so the client has to hide
+    it, and the sessions nothing can serve any more."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert 3 in app.spaces and app.spaces[3].sessions
+        api.gard_list[0]["status"] = "destroyed"
+        app.gard_names = {}                 # force the re-fetch a poll would do
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert 3 not in app.spaces

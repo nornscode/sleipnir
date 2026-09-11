@@ -191,12 +191,26 @@ def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool
     from sleipnir.app import SleipnirApp
 
     gard = asyncio.run(bootstrap()) if mode == "run" else None
-    harness = thread = None
+    harness = thread = app = None
     if mode == "run":
         from sleipnir.worker import build_harness, worker_thread
 
         harness, agent = build_harness(root, settings)
-        thread = worker_thread(harness, agent, gard)
+
+        def worker_stopped(error: BaseException | None) -> None:
+            if error is None or app is None:
+                return
+            note = (
+                "this space was closed elsewhere; restart sleip for a new one"
+                if type(error).__name__ == "GardDestroyed"
+                else f"the worker stopped: {error}"
+            )
+            try:
+                app.call_from_thread(app.notify, note, severity="error", timeout=30)
+            except Exception:
+                pass
+
+        thread = worker_thread(harness, agent, gard, worker_stopped)
 
     def on_exit():
         if harness is not None:

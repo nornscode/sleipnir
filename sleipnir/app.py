@@ -156,6 +156,11 @@ class SleipnirApp(App):
         # Gards destroyed since we last looked: no worker can ever
         # claim one again, so neither it nor its sessions are reachable.
         self.closed_gards: set[int] = set()
+        # Sessions whose tab was closed locally (ctrl+w / /close): the
+        # session lives on in Norns, so the next poll would otherwise
+        # bring the tab straight back. Cleared when the space holding it
+        # is re-selected.
+        self.closed_sessions: set[int] = set()
         self.agent_id: int | None = None
         self._pending_key: str | None = None
         self._pending_text: str | None = None
@@ -243,7 +248,7 @@ class SleipnirApp(App):
             spaces[self.gard_id] = Space(self.gard_id, self.gard_names.get(self.gard_id, f"gard {self.gard_id}"))
         for s in sessions:
             gid = s.get("gard_id") or NO_GARD
-            if gid in self.closed_gards:
+            if gid in self.closed_gards or s["id"] in self.closed_sessions:
                 continue
             if gid not in spaces:
                 name = "no gard" if gid == NO_GARD else self.gard_names.get(gid, f"gard {gid}")
@@ -299,6 +304,10 @@ class SleipnirApp(App):
         if gard_id == self.current_space:
             return
         self.current_space = gard_id
+        self.closed_sessions -= {
+            sid for sid, s in self.sessions.items() if (s.get("gard_id") or NO_GARD) == gard_id
+        }
+        self.spaces = self._group_spaces(list(self.sessions.values()))
         await self._sync_tabs(reset=True)
         self._focus_default()
 
@@ -766,8 +775,11 @@ class SleipnirApp(App):
         self.tabs.pop(pane_id, None)
         await tabs.remove_pane(pane_id)
         if pane_id != "new" and pane_id.startswith("s"):
-            # Closed tabs stay closed until the space is re-selected.
+            # Closed tabs stay closed until the space is re-selected: the
+            # session is still on the server, so the next poll would
+            # otherwise bring it straight back.
             sid = int(pane_id[1:])
+            self.closed_sessions.add(sid)
             space = self.spaces.get(self.current_space)
             if space:
                 space.sessions = [s for s in space.sessions if s["id"] != sid]

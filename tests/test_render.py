@@ -99,3 +99,16 @@ def test_spaces_lines():
     assert "laptop" in lines[2] and "worker connected" in lines[2] and "1 session, 1 working" in lines[2] and "this checkout" in lines[2]
     assert "server" in lines[3] and "worker gone" in lines[3] and "0 sessions" in lines[3]
     assert "no gard" in lines[4] and "1 session" in lines[4]
+
+
+def test_a_turn_cut_off_at_the_limit_says_so():
+    """The run no longer fails on it, so the transcript is the only place
+    the user could learn their answer stops mid-thought."""
+    from sleipnir.render import event_lines
+
+    cut = event_lines("llm_response", {"content": "Here is the first half of the fi", "finish_reason": "length"})
+    assert any("cut off" in str(line) for line in cut)
+    assert any("max_tokens" in str(line) for line in cut)
+
+    whole = event_lines("llm_response", {"content": "all of it", "finish_reason": "stop"})
+    assert not any("cut off" in str(line) for line in whole)

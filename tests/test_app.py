@@ -267,6 +267,36 @@ async def test_the_first_message_is_shown_once():
 
 
 @pytest.mark.asyncio
+async def test_closing_a_tab_keeps_it_closed_across_a_poll():
+    """ctrl+w only closes the tab locally — the session lives on in Norns —
+    so a poll that still sees it must not bring the tab straight back."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        tabs = app.query_one("#tabs", TabbedContent)
+        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+
+        tabs.active = "s1"
+        await app.close_active_tab()
+        await pilot.pause()
+        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+
+        # Norns still has the session; a poll must not resurrect the tab.
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert "s1" not in app.tabs
+
+        # Re-selecting the space (its own or, here, round-tripping through
+        # the other one) is what brings a closed tab back.
+        await app.select_space(0)
+        await pilot.pause(0.3)
+        await app.select_space(3)
+        await pilot.pause(0.3)
+        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+
+
+@pytest.mark.asyncio
 async def test_a_gard_first_seen_later_is_named():
     """A space created after this client started is still a name, not an id."""
     app, api = make_app()

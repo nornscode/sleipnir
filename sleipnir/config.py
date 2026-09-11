@@ -19,6 +19,9 @@ DEFAULTS = {
     # compact_at input tokens, keeping the last `keep` messages.
     "compact_at": "100000",
     "keep": "40",
+    # One response's ceiling. A coding turn writes whole files, and a turn
+    # that reaches the ceiling comes back cut off.
+    "max_tokens": "32000",
 }
 KEYS = tuple(DEFAULTS)
 
@@ -49,7 +52,7 @@ def save(root: Path, values: dict[str, str]) -> None:
 def set_value(root: Path, key: str, value: str) -> None:
     if key not in KEYS:
         raise KeyError(f"unknown setting {key!r}; settings are: {', '.join(KEYS)}")
-    if key in ("max_steps", "compact_at", "keep") and not (value.isdigit() and int(value) > 0):
+    if key in ("max_steps", "compact_at", "keep", "max_tokens") and not (value.isdigit() and int(value) > 0):
         raise ValueError(f"{key} must be a positive integer")
     values = load(root)
     values[key] = value

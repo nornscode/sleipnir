@@ -28,7 +28,7 @@ class Harness(Norns):
         return await super()._handle_llm_task(task)
 
 
-def build_agent(name: str, model: str, max_steps: int, compact_at: int, keep: int) -> Agent:
+def build_agent(name: str, model: str, max_steps: int, compact_at: int, keep: int, max_tokens: int) -> Agent:
     return Agent(
         name=name,
         model=model,
@@ -42,6 +42,8 @@ def build_agent(name: str, model: str, max_steps: int, compact_at: int, keep: in
         context_strategy="none",
         context_policy={"compact_at": compact_at, "keep": keep},
         max_steps=max_steps,
+        # A turn that writes a file is long; the default ceiling cuts it off.
+        max_tokens=max_tokens,
     )
 
 
@@ -51,13 +53,14 @@ def build_harness(root: Path, settings: dict[str, str]) -> tuple[Harness, Agent]
     logger.info(f"workspace {root}; {len(perms.rules)} allow rules from {perms.allow_file}")
     logger.info(
         f"agent {settings['agent']}, model {settings['model']}, max_steps {settings['max_steps']}, "
-        f"compact at {settings['compact_at']} tokens keeping {settings['keep']} messages"
+        f"compact at {settings['compact_at']} tokens keeping {settings['keep']} messages, "
+        f"max_tokens {settings['max_tokens']}"
     )
     url = os.environ.get("NORNS_URL", "http://localhost:4000")
     harness = Harness(url, api_key=os.environ.get("NORNS_API_KEY"))
     agent = build_agent(
         settings["agent"], settings["model"], int(settings["max_steps"]),
-        int(settings["compact_at"]), int(settings["keep"]),
+        int(settings["compact_at"]), int(settings["keep"]), int(settings["max_tokens"]),
     )
     return harness, agent
 

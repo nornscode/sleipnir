@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--max-steps", type=int)
         p.add_argument("--compact-at", type=int, help="input tokens at which Norns compacts the history")
         p.add_argument("--keep", type=int, help="messages kept verbatim after a compaction")
+        p.add_argument("--max-tokens", type=int, help="ceiling on one response; a turn that reaches it is cut off")
         p.add_argument("--no-gard", action="store_true", help="do not pin this worker to a per-repository gard")
 
     allow = sub.add_parser("allow", help="manage the allow list (.sleipnir/allow)")
@@ -113,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_steps": str(args.max_steps) if args.max_steps else None,
                 "compact_at": str(args.compact_at) if args.compact_at else None,
                 "keep": str(args.keep) if args.keep else None,
+                "max_tokens": str(args.max_tokens) if args.max_tokens else None,
             },
         )
         return cmd_start(root, settings, mode=args.command, use_gard=not args.no_gard)

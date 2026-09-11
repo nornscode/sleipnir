@@ -154,6 +154,16 @@ one checkout points at a different Norns.
 Never write a key into the repository on the user's behalf, and never
 echo one back: they are secrets, and .sleipnir/ may be committed.
 
+## When a turn is cut off
+
+max_tokens is the ceiling on a single response, not on the history —
+compaction handles the history. A turn that reaches the ceiling comes
+back truncated: the run completes, the transcript says "cut off at the
+response limit", and what you wrote stops mid-thought. Writing a large
+file in one go is what usually does it. Carry on where it stopped, or
+raise the ceiling with `sleip config set max_tokens <n>` and restart the
+worker.
+
 ## Configuring the harness
 
 Run these through bash from the repository root:
@@ -162,7 +172,7 @@ Run these through bash from the repository root:
 - sleip config show | set <key> <value> | unset <key>
   keys: agent (name in Norns), model, max_steps, compact_at (input
   tokens at which the history is folded into a summary), keep (messages
-  kept verbatim after that)
+  kept verbatim after that), max_tokens (the ceiling on one response)
 - sleip doctor: checks the connection, keys, and config
 - sleip docs: this text
 

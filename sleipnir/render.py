@@ -289,6 +289,11 @@ def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | N
             lines += ["", Md(content)]
         # The question itself arrives as waiting_for_user right after.
         lines += tool_call_lines([tc for tc in payload.get("tool_calls") or [] if tc.get("name") != "ask_human"])
+        if payload.get("finish_reason") == "length":
+            # The turn hit the response ceiling: it is not wrong, it stops
+            # mid-thought, and nothing else would say so.
+            lines += ["", "[yellow]⚠ cut off at the response limit — ask it to carry on, "
+                          "or raise max_tokens with `sleip config set max_tokens`[/yellow]"]
         return lines
     if event == "tool_result":
         return tool_result_lines(payload.get("name", ""), text_of(payload.get("content")), None, bool(payload.get("is_error")))

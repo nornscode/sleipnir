@@ -82,8 +82,9 @@ the client without a worker.
 
 Options: `--root` (repository root, default the current directory),
 `--agent` (default `sleipnir`, the agent's name in Norns), `--model` (default `claude-sonnet-5`),
-`--max-steps` (default 200), `--compact-at` (default 100000) and
-`--keep` (default 40). Every option is also a `SLEIPNIR_<NAME>`
+`--max-steps` (default 200), `--compact-at` (default 100000),
+`--keep` (default 40) and `--max-tokens` (default 32000, the ceiling on
+one response — a turn that reaches it comes back cut off and says so). Every option is also a `SLEIPNIR_<NAME>`
 environment variable or a `.sleipnir/config` setting.
 
 ### Repository environment variables

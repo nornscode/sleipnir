@@ -16,6 +16,7 @@ class FakeApi:
 
     def __init__(self):
         self.calls = []
+        self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"}]
         self.session_list = [
             {"id": 2, "key": "run_2", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "waiting",
              "first_message": None, "run": {"id": 12, "status": "waiting", "trigger_type": "message", "input": {"user_message": "add a flag"},
@@ -43,7 +44,7 @@ class FakeApi:
         return [{"id": 5, "name": "sleipnir"}, {"id": 8, "name": "my-agent"}]
 
     async def gards(self):
-        return [{"id": 3, "name": "laptop", "status": "ready"}]
+        return list(self.gard_list)
 
     async def send_message(self, agent_id, content, *, conversation_key=None, gard_id=None):
         self.calls.append(("send", agent_id, content, conversation_key, gard_id))
@@ -246,3 +247,19 @@ async def test_the_first_message_is_shown_once():
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert log_text(app.query_one("#log-3", RichLog)).count("hello?") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_gard_first_seen_later_is_named():
+    """A space created after this client started is still a name, not an id."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        api.gard_list.append({"id": 9, "name": "missive", "status": "ready"})
+        api.session_list.append({
+            "id": 11, "key": "run_11", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 9,
+            "status": "idle", "first_message": "hello", "run": {"id": 40, "status": "completed", "waiting_for": None},
+        })
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert app.spaces[9].name == "missive"

@@ -143,6 +143,9 @@ class SleipnirApp(App):
         self.spaces: dict[int, Space] = {}
         self.current_space: int | None = gard_id
         self.gard_names: dict[int, str] = {}
+        # Gard ids we have already re-fetched for, so an unnamed or
+        # destroyed gard cannot make us refetch on every poll.
+        self._asked_gards: set[int] = set()
         self.agent_id: int | None = None
         self._pending_key: str | None = None
         self._pending_text: str | None = None
@@ -184,7 +187,14 @@ class SleipnirApp(App):
     async def refresh_sessions(self) -> None:
         try:
             sessions = await self.api.sessions()
-            if self.agent_id is None or not self.gard_names:
+            # Spaces appear while we are running: a gard whose name we have
+            # never seen means the list is stale, not that it has no name.
+            unnamed = {
+                gid for s in sessions
+                if (gid := s.get("gard_id")) and gid not in self.gard_names
+            } - self._asked_gards
+            if self.agent_id is None or not self.gard_names or unnamed:
+                self._asked_gards |= unnamed
                 await self._learn_agent_and_gards()
         except Exception as e:
             self.set_status(f"cannot reach Norns: {e}")

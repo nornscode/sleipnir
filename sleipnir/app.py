@@ -385,22 +385,42 @@ class SleipnirApp(App):
         except Exception as e:
             self.log_line(tab, f"[red]could not load session: {e}[/red]")
             return
+        run = full.get("run") or {}
+        # Turns carry the run that produced them and the session says how
+        # each ended, which is what lets a transcript we did not watch being
+        # made show the same run boundaries as one we did.
+        outcomes = {r["id"]: r.get("status") for r in (full.get("runs") or []) if r.get("id")}
+        current, stamped = None, False
         for msg in full.get("messages") or []:
+            rid = msg.get("run_id")
+            if rid is not None:
+                stamped = True
+                if current is not None and rid != current:
+                    self.log_lines(tab, self._ending(current, outcomes, run))
+                current = rid
             self._learn_permission(tab, msg.get("name"), msg.get("content"))
             self.log_lines(tab, message_lines(msg, tab.permissions))
-        run = full.get("run") or {}
+        if stamped and current is not None:
+            self.log_lines(tab, self._ending(current, outcomes, run))
+
         if run.get("status") in ("pending", "running", "waiting") and run.get("id"):
             # The run in flight is not on the conversation row yet: its own
             # log is the rest of the history.
             await self._replay_run(tab, run)
-        elif run.get("status") in ("completed", "failed"):
-            # The row holds the turn but not the fact that the run ended,
-            # which is a thing only the events say. Without this a tab
-            # opened afterwards disagrees with one that watched it happen.
+        elif not stamped and run.get("status") in ("completed", "failed"):
+            # Turns written before runs were stamped: the last ending is
+            # still recoverable from the session's own run.
             self.log_lines(tab, ended_lines(run))
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
             tab.question = run["waiting_for"]["question"]
         self._update_prompt()
+
+    def _ending(self, run_id: int, outcomes: dict, row_run: dict) -> list:
+        """How that run finished. The session's own run says why it failed;
+        for older ones all we have is that it did."""
+        if row_run.get("id") == run_id:
+            return ended_lines(row_run)
+        return ended_lines({"status": outcomes.get(run_id)})
 
     async def _replay_run(self, tab: Tab, run: dict) -> None:
         try:

@@ -19,6 +19,7 @@ class FakeApi:
         self.calls = []
         self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"}]
         self.destroy_conflict = False
+        self.run_outcomes = {}
         self.session_list = [
             {"id": 2, "key": "run_2", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "waiting",
              "first_message": None, "run": {"id": 12, "status": "waiting", "trigger_type": "message", "input": {"user_message": "add a flag"},
@@ -37,10 +38,16 @@ class FakeApi:
         if (s.get("run") or {}).get("status") in ("pending", "running", "waiting"):
             # Norns writes the turn to the conversation when the run ends.
             return {**s, "messages": []}
-        return {**s, "messages": [
-            {"role": "user", "content": s["first_message"]},
-            {"role": "assistant", "content": "on it"},
-        ]}
+        return {
+            **s,
+            "messages": [
+                {"role": "user", "content": s["first_message"], "run_id": (s.get("run") or {}).get("id")},
+                {"role": "assistant", "content": "on it", "run_id": (s.get("run") or {}).get("id")},
+            ],
+            "runs": self.run_outcomes.get(session_id, [
+                {"id": (s.get("run") or {}).get("id"), "status": (s.get("run") or {}).get("status")},
+            ]),
+        }
 
     async def agents(self):
         return [{"id": 5, "name": "sleipnir"}, {"id": 8, "name": "my-agent"}]
@@ -435,3 +442,63 @@ async def test_a_failed_run_says_why_when_loaded():
         app.query_one(TabbedContent).active = "s1"
         await pilot.pause(0.3)
         assert "the worker went away" in log_text(app.query_one("#log-1", RichLog))
+
+
+@pytest.mark.asyncio
+async def test_run_boundaries_come_from_the_stored_turns():
+    """A session with runs behind it reads the same as it did live: each
+    run's ending where it ended, whoever is looking."""
+    api = FakeApi()
+    api.session_list[1]["run"] = {"id": 40, "status": "completed", "waiting_for": None}
+    api.run_outcomes[1] = [
+        {"id": 38, "status": "completed"},
+        {"id": 39, "status": "failed"},
+        {"id": 40, "status": "completed"},
+    ]
+
+    async def session(session_id):
+        return {
+            **api.session_list[1],
+            "runs": api.run_outcomes[1],
+            "messages": [
+                {"role": "user", "content": "one", "run_id": 38},
+                {"role": "assistant", "content": "did one", "run_id": 38},
+                {"role": "user", "content": "two", "run_id": 39},
+                {"role": "user", "content": "three", "run_id": 40},
+                {"role": "assistant", "content": "did three", "run_id": 40},
+            ],
+        }
+
+    api.session = session
+    app, _ = make_app(api)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        app.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.3)
+        text = log_text(app.query_one("#log-1", RichLog))
+        # Two completed runs and the failed one between them.
+        assert text.count("done") == 2
+        assert "run failed" in text
+        assert text.index("did one") < text.index("run failed") < text.index("did three")
+
+
+@pytest.mark.asyncio
+async def test_turns_stored_before_runs_were_stamped_still_end():
+    """Old conversations have no run ids; the session's own run still says
+    how the last one finished."""
+    api = FakeApi()
+
+    async def session(session_id):
+        return {
+            **api.session_list[1],
+            "runs": [],
+            "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        }
+
+    api.session = session
+    app, _ = make_app(api)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        app.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.3)
+        assert log_text(app.query_one("#log-1", RichLog)).count("done") == 1

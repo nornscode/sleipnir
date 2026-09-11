@@ -270,9 +270,12 @@ def ended_lines(run: dict) -> list[str]:
     row rather than from its own events — the ending, which the row does
     not record. The output is left out: it is already the last assistant
     message on the row."""
-    if run.get("status") == "failed":
+    status = run.get("status")
+    if status == "failed":
         return event_lines("error", {"error": (run.get("failure_metadata") or {}).get("error") or "run failed"})
-    return event_lines("completed", {"output": ""})
+    if status == "completed":
+        return event_lines("completed", {"output": ""})
+    return []
 
 
 def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:

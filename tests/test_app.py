@@ -407,3 +407,31 @@ async def test_the_instance_that_sent_it_shows_it_once():
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert log_text(app.query_one("#log-1", RichLog)).count("one more thing") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_finished_run_reads_the_same_however_it_was_loaded():
+    """Watching a run end shows "done"; the conversation row does not record
+    that, so a tab opened afterwards has to add it back."""
+    api = FakeApi()
+    app, _ = make_app(api)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        app.query_one(TabbedContent).active = "s1"      # its run is completed
+        await pilot.pause(0.3)
+        assert "done" in log_text(app.query_one("#log-1", RichLog))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_says_why_when_loaded():
+    api = FakeApi()
+    api.session_list[1]["run"] = {
+        "id": 9, "status": "failed", "waiting_for": None,
+        "failure_metadata": {"error": "the worker went away"},
+    }
+    app, _ = make_app(api)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        app.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.3)
+        assert "the worker went away" in log_text(app.query_one("#log-1", RichLog))

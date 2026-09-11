@@ -25,6 +25,7 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, OptionList
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
     Md,
+    ended_lines,
     event_lines,
     expand_answer,
     message_lines,
@@ -392,6 +393,11 @@ class SleipnirApp(App):
             # The run in flight is not on the conversation row yet: its own
             # log is the rest of the history.
             await self._replay_run(tab, run)
+        elif run.get("status") in ("completed", "failed"):
+            # The row holds the turn but not the fact that the run ended,
+            # which is a thing only the events say. Without this a tab
+            # opened afterwards disagrees with one that watched it happen.
+            self.log_lines(tab, ended_lines(run))
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
             tab.question = run["waiting_for"]["question"]
         self._update_prompt()

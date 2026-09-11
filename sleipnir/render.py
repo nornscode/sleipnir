@@ -265,6 +265,16 @@ def run_event_lines(events: list[dict], known: dict[str, tuple[str, str]] | None
     return lines
 
 
+def ended_lines(run: dict) -> list[str]:
+    """How a finished run reads when its history came from the conversation
+    row rather than from its own events — the ending, which the row does
+    not record. The output is left out: it is already the last assistant
+    message on the row."""
+    if run.get("status") == "failed":
+        return event_lines("error", {"error": (run.get("failure_metadata") or {}).get("error") or "run failed"})
+    return event_lines("completed", {"output": ""})
+
+
 def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """A live channel event as chat lines, Rich markup."""
     if event == "agent_started":

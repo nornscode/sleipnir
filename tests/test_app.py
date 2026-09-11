@@ -357,3 +357,53 @@ async def test_a_gard_closed_elsewhere_disappears():
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert 3 not in app.spaces
+
+
+@pytest.mark.asyncio
+async def test_another_instance_sees_the_message_it_did_not_send():
+    """Nothing on the wire carries the user's turn, so an instance that did
+    not type it learns of it when the session's run changes."""
+    api = FakeApi()
+    watcher, _ = make_app(api)
+    async with watcher.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        tab = watcher.tabs["s1"]
+        watcher.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.3)
+        assert tab.loaded
+
+        # Somewhere else, someone sends into the same session.
+        api.session_list[1]["run"] = {
+            "id": 99, "status": "running", "trigger_type": "message",
+            "input": {"user_message": "have another look"}, "waiting_for": None,
+        }
+        await watcher.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert log_text(watcher.query_one("#log-1", RichLog)).count("have another look") == 1
+
+        # A later poll of the same run must not say it again.
+        await watcher.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert log_text(watcher.query_one("#log-1", RichLog)).count("have another look") == 1
+
+
+@pytest.mark.asyncio
+async def test_the_instance_that_sent_it_shows_it_once():
+    api = FakeApi()
+    app, _ = make_app(api)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        app.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.3)
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "one more thing"
+        await prompt.action_submit()
+        await pilot.pause(0.3)
+        # send_message returns run 20; the session row catches up to it.
+        api.session_list[1]["run"] = {
+            "id": 20, "status": "running", "trigger_type": "message",
+            "input": {"user_message": "one more thing"}, "waiting_for": None,
+        }
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert log_text(app.query_one("#log-1", RichLog)).count("one more thing") == 1

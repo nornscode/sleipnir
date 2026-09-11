@@ -19,6 +19,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from rich.markdown import Markdown
+from rich.markup import escape
 from textual.widgets import Footer, Input, Label, ListItem, ListView, OptionList, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
@@ -67,6 +68,10 @@ class Tab:
     agent_id: int
     key: str
     run_id: int | None = None
+    # The run whose opening user message this tab has already shown, so a
+    # message is not printed twice by the instance that sent it, and is
+    # printed once by every instance that did not.
+    shown_user_run: int | None = None
     question: str | None = None
     last_assistant: str = ""
     title: str = ""
@@ -217,7 +222,9 @@ class SleipnirApp(App):
                     await self.close_new_tab()
                     await self.open_session(s, replay=False)
                     if self._pending_text:
-                        self.log_lines(self.tabs[f"s{s['id']}"], ["", f"[b green]›[/] {self._pending_text}"])
+                        started = self.tabs[f"s{s['id']}"]
+                        started.shown_user_run = (s.get("run") or {}).get("id")
+                        self.log_lines(started, ["", f"[b green]›[/] {self._pending_text}"])
                         self._pending_text = None
                     break
 
@@ -343,6 +350,13 @@ class SleipnirApp(App):
                 self.set_tab_title(pane_id, title)
             if run.get("id") and run["id"] != tab.run_id:
                 tab.run_id = run["id"]
+                # Nothing on the wire carries the user's turn — agent_started
+                # is only a run id — so this is where an instance that did
+                # not send it learns what was said.
+                opening = text_of((run.get("input") or {}).get("user_message")).strip()
+                if tab.loaded and opening and tab.shown_user_run != run["id"] and run.get("trigger_type") != "fork":
+                    self.log_lines(tab, ["", f"[b green]›[/] {escape(opening)}"])
+                tab.shown_user_run = run["id"]
             if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
                 if tab.question != run["waiting_for"]["question"]:
                     tab.question = run["waiting_for"]["question"]
@@ -389,6 +403,7 @@ class SleipnirApp(App):
             self.log_line(tab, f"[red]could not load the run in progress: {e}[/red]")
             return
         message = text_of((run.get("input") or {}).get("user_message")).strip()
+        tab.shown_user_run = run.get("id")
         if message and run.get("trigger_type") != "fork":
             self.log_lines(tab, ["", f"[b green]›[/] {message}"])
         for e in events:
@@ -535,6 +550,7 @@ class SleipnirApp(App):
             self.log_line(tab, f"[red]{e.message}[/red]")
             return
         tab.run_id = run_id
+        tab.shown_user_run = run_id
         self.log_lines(tab, ["", f"[b green]›[/] {text}"])
 
     def _agent_for_space(self) -> int | None:

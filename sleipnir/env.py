@@ -2,8 +2,10 @@
 
 Precedence, highest first: the process environment, `--env-file`, the
 repository's `.envrc` through `direnv export` (only if direnv is installed
-and has allowed the file), then the repository's `.env`. Files never
-override a variable the process already has.
+and has allowed the file), the repository's `.env`, then this machine's
+`~/.sleipnir/env` (written by `sleip setup`). Files never override a
+variable the process already has, and the machine-wide file comes last so
+a checkout can point somewhere else without being reconfigured.
 """
 
 from __future__ import annotations
@@ -14,6 +16,9 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+
+SLEIPNIR_HOME = Path(os.environ.get("SLEIPNIR_HOME", str(Path.home() / ".sleipnir")))
+USER_ENV = SLEIPNIR_HOME / "env"
 
 
 def parse_env_file(text: str) -> dict[str, str]:
@@ -74,6 +79,11 @@ def load_env(root: Path, env_file: Path | None = None) -> dict[str, str]:
     dotenv = root / ".env"
     if dotenv.is_file():
         layers.append((".env", parse_env_file(dotenv.read_text())))
+    if USER_ENV.is_file():
+        try:
+            layers.append((f"{USER_ENV} (sleip setup)", parse_env_file(USER_ENV.read_text())))
+        except OSError:
+            pass
 
     for source, values in layers:
         for key, value in values.items():

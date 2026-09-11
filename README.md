@@ -24,6 +24,21 @@ That installs `sleip`, and `sleipnir` as an alias.
 From the repository you want the agent to work in:
 
 ```bash
+sleip
+```
+
+The first time, it asks for the two keys it needs — your Norns API key,
+and an LLM key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) which this
+worker uses to make the model calls on your machine. It checks them
+against Norns as you go, then keeps them in `~/.sleipnir/env`,
+owner-readable and outside every repository, so you answer once and
+every space works. `sleip setup` runs the same questions again,
+`--force` re-asks for keys already set, and `sleip doctor` checks them.
+
+A repository's own environment still wins, so a checkout can point at a
+different Norns:
+
+```bash
 export NORNS_URL=http://localhost:4000
 export NORNS_API_KEY=nrn_...
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -32,8 +47,9 @@ sleip
 
 Or keep those in the repository: `sleip` reads `--env-file`, then the
 repository's `.envrc` through `direnv export` (if direnv is installed and
-has allowed it), then its `.env`. A variable the shell already has is
-never overridden.
+has allowed it), then its `.env`, then `~/.sleipnir/env`. A variable the
+shell already has is never overridden, and the machine-wide file comes
+last so a checkout can always override it.
 
 That opens the session client with this repository's worker running in
 the same process. Down the left: your spaces, one per checkout with a
@@ -144,6 +160,7 @@ rules.
 through `bash`:
 
 ```bash
+sleip setup       # the keys, stored for every space (--force to re-ask)
 sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
 sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
 sleip doctor      # connection, keys, gard, allow list

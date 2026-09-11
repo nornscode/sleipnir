@@ -22,7 +22,7 @@ from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
 
-SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs", "help"}
+SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs", "help", "setup"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     u = cfg_sub.add_parser("unset")
     u.add_argument("key", choices=config.KEYS)
 
+    setup = sub.add_parser("setup", help="set the keys sleip needs, kept for every space")
+    setup.add_argument("--force", action="store_true", help="ask again for keys that are already set")
     sub.add_parser("doctor", help="check the environment and configuration")
     sub.add_parser("docs", help="print the reference the agent reads")
     sub.add_parser("help", help="the commands, in brief")
@@ -114,6 +116,14 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         return cmd_start(root, settings, mode=args.command, use_gard=not args.no_gard)
+    if args.command == "setup":
+        from sleipnir import setup
+
+        try:
+            return setup.run(force=args.force)
+        except KeyboardInterrupt:
+            print("\nnothing saved.", file=sys.stderr)
+            return 1
     if args.command == "doctor":
         return cmd_doctor(root, loaded_env)
     if args.command == "allow":
@@ -135,8 +145,26 @@ def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool
     from sleipnir.api import NornsApi
     from sleipnir.gard import ensure_gard
 
-    url = os.environ.get("NORNS_URL", "http://localhost:4000")
-    api_key = os.environ.get("NORNS_API_KEY", "")
+    from sleipnir import setup
+
+    # Nothing configured yet: ask, rather than failing on a blank header.
+    if not setup.configured():
+        try:
+            if setup.run() != 0:
+                return 1
+        except KeyboardInterrupt:
+            print("\nnothing saved.", file=sys.stderr)
+            return 1
+
+    url = os.environ.get("NORNS_URL", "").strip() or "http://localhost:4000"
+    api_key = os.environ.get("NORNS_API_KEY", "").strip()
+    if not api_key:
+        print(
+            "error: NORNS_API_KEY is not set, so there is nothing to authenticate with.\n"
+            "Run `sleip setup`, or set it in this repository's .envrc or .env.",
+            file=sys.stderr,
+        )
+        return 1
 
     async def bootstrap():
         api = NornsApi(url, api_key)

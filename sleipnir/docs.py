@@ -114,6 +114,7 @@ That is the whole surface; there is nothing else to discover.
     sleip chat      the client alone, without a worker
     sleip allow     the allow list, above
     sleip config    settings, below
+    sleip setup     ask for the keys and store them for every space
     sleip doctor    check the connection, keys, gard, and allow list
     sleip docs      this text
     sleip help      the commands, in brief
@@ -122,6 +123,24 @@ Anywhere: --root <dir> (repository root, default the current
 directory), --env-file <file>, --version. run, serve and chat also take
 --agent, --model, --max-steps, --compact-at, --keep and --no-gard (do
 not pin the worker to a per-repository gard).
+
+## Keys
+
+sleip needs two: NORNS_API_KEY, which authenticates the client and the
+worker to Norns, and an LLM key (ANTHROPIC_API_KEY, or OPENAI_API_KEY),
+which this worker uses to make the model calls. The model calls happen
+here, on the developer's machine — Norns dispatches the task and never
+sees the LLM key.
+
+`sleip setup` asks for them, checks them against Norns, and writes them
+to ~/.sleipnir/env, owner-readable and outside every repository, so one
+answer serves every space. Starting sleip without them runs the same
+questions. `sleip setup --force` asks again for keys already set. A
+repository's own .envrc or .env still overrides that file, which is how
+one checkout points at a different Norns.
+
+Never write a key into the repository on the user's behalf, and never
+echo one back: they are secrets, and .sleipnir/ may be committed.
 
 ## Configuring the harness
 

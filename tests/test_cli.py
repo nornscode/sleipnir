@@ -89,3 +89,14 @@ def test_bare_invocation_means_run(monkeypatch):
     assert calls[1][:2] == ("serve", False)
     assert main(["chat"]) == 0
     assert calls[2][0] == "chat"
+
+
+def test_start_unconfigured_and_headless_explains_itself(tmp_path, capsys, monkeypatch):
+    """No keys and nowhere to ask: say so, rather than sending a blank header."""
+    monkeypatch.setenv("NORNS_API_KEY", "")
+    monkeypatch.setattr("sleipnir.environment.load", lambda root: None)
+    monkeypatch.setattr("sleipnir.setup.interactive", lambda: False)
+    assert main(["--root", str(tmp_path), "run"]) == 1
+    err = capsys.readouterr().err
+    assert "not configured" in err
+    assert "sleip setup" in err

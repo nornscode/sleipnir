@@ -31,10 +31,13 @@ class FakeApi:
 
     async def session(self, session_id):
         s = next(s for s in self.session_list if s["id"] == session_id)
-        messages = [{"role": "user", "content": s["first_message"]}, {"role": "assistant", "content": "on it"}]
-        if session_id == 2:
-            messages = []
-        return {**s, "messages": messages}
+        if (s.get("run") or {}).get("status") in ("pending", "running", "waiting"):
+            # Norns writes the turn to the conversation when the run ends.
+            return {**s, "messages": []}
+        return {**s, "messages": [
+            {"role": "user", "content": s["first_message"]},
+            {"role": "assistant", "content": "on it"},
+        ]}
 
     async def agents(self):
         return [{"id": 5, "name": "sleipnir"}, {"id": 8, "name": "my-agent"}]
@@ -218,3 +221,28 @@ async def test_new_session_starts_from_the_first_line():
         await app.command("/close")
         await pilot.pause()
         assert "s3" not in app.tabs
+
+
+@pytest.mark.asyncio
+async def test_the_first_message_is_shown_once():
+    """The new tab echoes the line it was started from; adding the pane
+    must not also load the same message back off the run in flight."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        await app.new_tab()
+        await pilot.pause(0.3)
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "hello?"
+        await prompt.action_submit()
+        await pilot.pause()
+        key = api.calls[-1][3]
+        api.session_list.insert(0, {
+            "id": 3, "key": key, "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3,
+            "status": "running", "first_message": None,
+            "run": {"id": 21, "status": "running", "trigger_type": "message",
+                    "input": {"user_message": "hello?"}, "waiting_for": None},
+        })
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert log_text(app.query_one("#log-3", RichLog)).count("hello?") == 1

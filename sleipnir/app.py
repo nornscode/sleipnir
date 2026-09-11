@@ -301,7 +301,13 @@ class SleipnirApp(App):
             pane_id = f"s{s['id']}"
             run = s.get("run") or {}
             if pane_id not in self.tabs:
-                tab = Tab(session_id=s["id"], agent_id=s["agent_id"], key=s["key"], run_id=run.get("id"), title=tab_title(s))
+                # A session we just started echoes its own first line below;
+                # adding the pane posts TabActivated, whose handler would
+                # otherwise load the same message from the run in flight.
+                tab = Tab(
+                    session_id=s["id"], agent_id=s["agent_id"], key=s["key"], run_id=run.get("id"),
+                    title=tab_title(s), loaded=s["key"] == self._pending_key,
+                )
                 self.tabs[pane_id] = tab
                 log = RichLog(wrap=True, markup=True, highlight=False, id=f"log-{s['id']}")
                 await tabs.add_pane(TabPane(tab.title, log, id=pane_id))

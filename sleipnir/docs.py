@@ -17,6 +17,18 @@ in front of the developer right now. Its layout:
   worker running in it, this one first, each showing how many of its
   sessions are working or waiting on the user. Sessions that no gard
   serves share a "no gard" space.
+- A space is created by running `sleip` in a checkout, and no other
+  way: on first start there it creates that repository's gard and
+  remembers it in ~/.sleipnir/gards.json. There is no command for it,
+  in the client or the CLI, so if the user asks how to start a new
+  space, the answer is to open a terminal in that repository and run
+  `sleip`. It then appears in every client's sidebar (ctrl+r to
+  refresh one that is already open). `/new` starts a new session in
+  the space you are already in, which is a different thing.
+- The key is the path, not the repository: a git worktree is a
+  checkout of its own, so two worktrees of one repository are two
+  spaces with two working trees, and a subdirectory started in by
+  mistake is its own space too. The name is the directory's own name.
 - The tabs across the top are the **sessions** of the selected space.
   Each is a Norns conversation with its own history and run.
 - The box along the bottom is where the user types. What they write

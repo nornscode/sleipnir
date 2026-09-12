@@ -153,6 +153,26 @@ def request_message(token: str, tool: str, subject: str, note: str = "") -> str:
     )
 
 
+# Auto mode is not a new mechanism: it is the allow list at its widest.
+# Writing the rules down rather than holding a flag in memory means the
+# worker picks them up the way it picks up `sleip allow add`, they survive
+# a restart, `sleip allow list` shows exactly what you agreed to, and the
+# floor still holds — always_asks keeps the harness's own configuration
+# out of reach, so no level of auto lets the agent widen its own powers.
+AUTO_LEVELS = {
+    "edits": [Rule("edit_file", "*"), Rule("write_file", "*")],
+    "all": [Rule("edit_file", "*"), Rule("write_file", "*"), Rule("bash", "*")],
+}
+
+
+def auto_level(rules: list[Rule]) -> str:
+    """Which auto level these rules amount to: all, edits, or off."""
+    for level in ("all", "edits"):
+        if all(r in rules for r in AUTO_LEVELS[level]):
+            return level
+    return "off"
+
+
 class Permissions:
     def __init__(self, allow_file: Path | None):
         self.allow_file = allow_file
@@ -202,6 +222,23 @@ class Permissions:
             self.allow_file.write_text("".join(f"{r}\n" for r in self.rules))
             self._mtime = self.allow_file.stat().st_mtime_ns
         return removed
+
+    def auto(self) -> str:
+        """The current level, read fresh: another process may have set it."""
+        self._refresh()
+        return auto_level(self.rules)
+
+    def set_auto(self, level: str) -> str:
+        """Turn auto mode on at a level, or off. Returns the level set."""
+        if level not in ("off", *AUTO_LEVELS):
+            raise ValueError(f"auto is off, edits, or all — not {level!r}")
+        self._refresh()
+        # Off clears every level's rules, so "off" means off whichever way
+        # it was turned on.
+        self.remove_rules([r for rules in AUTO_LEVELS.values() for r in rules])
+        if level != "off":
+            self.add_rules(AUTO_LEVELS[level])
+        return level
 
     def allowed(self, tool: str, subject: str) -> bool:
         if tool in READ_ONLY:

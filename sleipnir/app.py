@@ -56,6 +56,9 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
   /close            hide this session from the tree (ctrl+w); it comes back
+  /auto [edits|all|off] stop being asked about every command. edits lets
+                    file changes through, all lets commands through too;
+                    changing the harness itself always asks
   /image <path> [text]  hand the agent a picture — a screenshot from
                     anywhere on this machine, not just the repository
   /rename <name>    name this session; empty puts the guessed name back
@@ -187,6 +190,7 @@ class SleipnirApp(App):
         self._pending_key: str | None = None
         self._pending_text: str | None = None
         self._delete_armed: tuple[str, float] | None = None
+        self.auto_level = "off"
 
     # -- layout -------------------------------------------------------------
 
@@ -288,7 +292,10 @@ class SleipnirApp(App):
         here = self.gard_names.get(self.gard_id, self.gard_id) if self.gard_id else "no gard"
         # The sidebar already counts spaces and their sessions; this says
         # what it cannot — where you are, and whether anything wants you.
+        self.auto_level = self._read_auto()
         state = [f"{here} · {self.agent_name}"]
+        if self.auto_level != "off":
+            state.append(f"[yellow]auto: {self.auto_level}[/]")
         if thinking:
             state.insert(0, f"{thinking} working")
         if waiting:
@@ -887,6 +894,8 @@ class SleipnirApp(App):
             await self.resume(tab)
         elif cmd == "/close":
             await self.close_active_tab()
+        elif cmd == "/auto":
+            self.set_auto(args[0] if args else "all")
         elif cmd == "/image":
             await self.send_image(args)
         elif cmd == "/rename":
@@ -955,6 +964,54 @@ class SleipnirApp(App):
         self.notify(f"archived “{tab.title}” — /archived to see it")
         self._focus_default()
         self.refresh_sessions()
+
+    def set_auto(self, level: str) -> None:
+        """`/auto [edits|all|off]` — stop being asked about every command.
+
+        It writes allow rules into this checkout's `.sleipnir/allow`, which
+        is how it reaches the worker at all: the worker is another process
+        and already watches that file. Written down rather than held in
+        memory, it also survives a restart and can be read back.
+        """
+        from sleipnir.permissions import Permissions
+        from sleipnir.runtime import ALLOW_FILE
+
+        root = self._checkout_of(self.current_space) if self.current_space else self.root
+        if root is None:
+            self.notify("that space's checkout is on another machine", severity="warning")
+            return
+        try:
+            perms = Permissions(root / ALLOW_FILE)
+            level = perms.set_auto(level)
+        except ValueError as e:
+            self.notify(str(e), severity="warning")
+            return
+        except OSError as e:
+            self.notify(f"could not write the allow list: {e}", severity="error")
+            return
+
+        self.auto_level = level
+        if level == "all":
+            self.notify("auto: nothing will be asked, except changes to the harness itself. /auto off to stop", severity="warning")
+        elif level == "edits":
+            self.notify("auto: file changes go without asking; commands still ask. /auto off to stop")
+        else:
+            self.notify("auto off — you will be asked again")
+        self.refresh_sessions()
+
+    def _read_auto(self) -> str:
+        """This checkout's level, read from the file each poll: `sleip allow`
+        and another window can change it underneath us."""
+        from sleipnir.permissions import Permissions
+        from sleipnir.runtime import ALLOW_FILE
+
+        root = self._checkout_of(self.current_space) if self.current_space else self.root
+        if root is None:
+            return "off"
+        try:
+            return Permissions(root / ALLOW_FILE).auto()
+        except OSError:
+            return "off"
 
     async def send_image(self, args: list[str]) -> None:
         """`/image <path> [something to say about it]` — attach a picture

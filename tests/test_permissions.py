@@ -194,3 +194,49 @@ def test_a_stale_token_does_not_trap_the_agent_in_a_loop(tmp_path):
 
     p.observe(_messages(second, "yes"))
     p.check("bash", "find . -type d | wc -l", approval=second)  # proceeds
+
+
+def test_auto_mode_is_the_allow_list_at_its_widest(tmp_path):
+    """Not a new mechanism and not a flag in memory: rules on disk, which
+    is how it reaches a worker in another process at all."""
+    allow = tmp_path / "allow"
+    p = Permissions(allow)
+    assert p.auto() == "off"
+
+    assert p.set_auto("edits") == "edits"
+    p.check("edit_file", "lib/thing.py")       # no longer asks
+    p.check("write_file", "lib/new.py")
+    with pytest.raises(PermissionRequired):    # commands still do
+        p.check("bash", "rm -rf build")
+
+    assert p.set_auto("all") == "all"
+    p.check("bash", "rm -rf build")
+    assert p.auto() == "all"
+
+    # A second process reads the level off the file, which is the point.
+    assert Permissions(allow).auto() == "all"
+
+    assert p.set_auto("off") == "off"
+    assert Permissions(allow).auto() == "off"
+    with pytest.raises(PermissionRequired):
+        p.check("edit_file", "lib/thing.py")
+
+
+def test_no_level_of_auto_lets_the_agent_widen_its_own_powers(tmp_path):
+    """The floor under every level: an agent that could run `sleip allow
+    add` unasked could grant itself anything."""
+    p = Permissions(tmp_path / "allow")
+    p.set_auto("all")
+
+    with pytest.raises(PermissionRequired):
+        p.check("bash", "sleip allow add bash *")
+    with pytest.raises(PermissionRequired):
+        p.check("write_file", ".sleipnir/allow")
+
+
+def test_auto_off_clears_whichever_way_it_was_turned_on(tmp_path):
+    p = Permissions(tmp_path / "allow")
+    p.set_auto("all")
+    p.set_auto("off")
+    # "all" adds the edits rules too; off must take all of them back out.
+    assert p.rules == []

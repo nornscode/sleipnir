@@ -56,6 +56,7 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
   /close            hide this session from the tree (ctrl+w); it comes back
+  /rename <name>    name this session; empty puts the guessed name back
   /archive          put this session away: the tab goes and stays gone,
                     but nothing is deleted
   /archived         the sessions you have put away
@@ -875,6 +876,8 @@ class SleipnirApp(App):
             await self.resume(tab)
         elif cmd == "/close":
             await self.close_active_tab()
+        elif cmd == "/rename":
+            await self.rename_active_session(" ".join(args))
         elif cmd == "/archive":
             await self.archive_active_session(force="force" in args)
         elif cmd == "/archived":
@@ -939,6 +942,25 @@ class SleipnirApp(App):
         self.notify(f"archived “{tab.title}” — /archived to see it")
         self._focus_default()
         self.refresh_sessions()
+
+    async def rename_active_session(self, title: str) -> None:
+        """Name the session in front of you. The name is stored on the
+        session itself, so it is the same in every window; `/rename` with
+        nothing after it puts the guessed title back."""
+        tab = self.tabs.get(self.active_pane or "")
+        if tab is None or tab.session_id == 0:
+            self.notify("no session to rename", severity="warning")
+            return
+        try:
+            session = await self.api.rename_session(tab.session_id, title)
+        except ApiError as e:
+            self.notify(e.message, severity="error")
+            return
+        self.sessions[session["id"]] = {**self.sessions.get(session["id"], {}), **session}
+        tab.title = tab_title(self.sessions[session["id"]])
+        self.spaces = self._group_spaces(list(self.sessions.values()))
+        await self._render_sidebar()
+        self.notify(f"renamed to “{tab.title}”" if title.strip() else "name cleared")
 
     async def show_archive(self) -> None:
         """`/archived`: the sessions put away, newest first, each with the

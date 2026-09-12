@@ -59,6 +59,10 @@ class NornsApi:
             path += "?force=true"
         await self._request("DELETE", path)
 
+    async def rename_session(self, session_id: int, title: str) -> dict:
+        """Name a session. Blank clears it and the guessed title returns."""
+        return await self._request("PATCH", f"/sessions/{session_id}", json={"title": title})
+
     async def restore_session(self, session_id: int) -> dict:
         return await self._request("POST", f"/sessions/{session_id}/restore")
 

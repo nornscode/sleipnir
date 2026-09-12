@@ -67,6 +67,8 @@ Commands the user types in that box (they are the client's, not yours):
     /spaces           every space, with whether a worker is in it
     /resume           reload this session and re-attach to its run
     /close            hide this session from the tree (ctrl+w); it comes back
+    /rename <name>    name this session; the name is stored on the session,
+                      so every client shows it. Empty restores the guess
     /archive          put this session away: the tab goes and stays gone
                       across restarts, but nothing is deleted
     /archived         the sessions put away, with their ids

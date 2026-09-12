@@ -50,6 +50,12 @@ class FakeApi:
         self.archived_list.insert(0, {**s, "archived_at": "2026-09-11T00:00:00Z"})
         self.calls.append(("archive", session_id, force))
 
+    async def rename_session(self, session_id, title):
+        s = next(s for s in self.session_list if s["id"] == session_id)
+        s["title"] = title.strip() or None
+        self.calls.append(("rename", session_id, s["title"]))
+        return dict(s)
+
     async def restore_session(self, session_id):
         s = next(s for s in self.archived_list if s["id"] == session_id)
         self.archived_list.remove(s)
@@ -853,3 +859,31 @@ async def test_a_no_gard_worker_still_sees_what_it_serves():
         await pilot.pause(0.3)
         assert 0 in [n.data["gard_id"] for n in tree(app).root.children]
         assert session_ids_under(app, 0) == [50]
+
+
+@pytest.mark.asyncio
+async def test_a_session_can_be_named_and_unnamed():
+    """A session titled from its first turn is often titled "test". The
+    name is stored on the session, not in this client, so it is the same
+    name in every window."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        await show(app, 1)
+
+        await app.command("/rename Swift migration")
+        await pilot.pause(0.3)
+        assert ("rename", 1, "Swift migration") in api.calls
+        assert app.tabs["s1"].title == "Swift migration"
+        assert "Swift migration" in str(space_node(app, 3).children[0].label)
+
+        # It survives a poll, because it came back from Norns.
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert "Swift migration" in str(space_node(app, 3).children[0].label)
+
+        # Emptied, the guess returns.
+        await app.command("/rename")
+        await pilot.pause(0.3)
+        assert ("rename", 1, None) in api.calls
+        assert "fix the tests" in str(space_node(app, 3).children[0].label)

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from rich.markup import escape
+from rich.style import Style
+from rich.text import Text
 
 @dataclass(frozen=True)
 class Md:
@@ -248,7 +250,9 @@ RUN_EVENT_NAMES = {"run_completed": "completed", "run_failed": "error"}
 RUN_EVENTS_SHOWN = {"llm_response", "tool_result", "waiting_for_user", "context_compacted", "run_completed", "run_failed"}
 
 
-def run_event_lines(events: list[dict], known: dict[str, tuple[str, str]] | None = None) -> list[str]:
+def run_event_lines(
+    events: list[dict], known: dict[str, tuple[str, str]] | None = None, run_id=None
+) -> list[str]:
     """The chat lines of a run's event log: what the conversation row will
     hold once the run finishes. After a compaction only the events since
     it count, because the compacted history is already on the row."""
@@ -261,8 +265,43 @@ def run_event_lines(events: list[dict], known: dict[str, tuple[str, str]] | None
         payload = e.get("payload") or {}
         if kind == "run_failed":
             payload = {"error": payload.get("error")}
+        if run_id and kind in ("run_completed", "run_failed"):
+            payload = {**payload, "run_id": run_id}
         lines += event_lines(RUN_EVENT_NAMES.get(kind, kind), payload, known)
     return lines
+
+
+# Where this client's Norns serves its dashboard. The transcript is the
+# envelope; the run page is the whole log, and it is one click away.
+WEB_BASE = ""
+
+
+def set_web_base(url: str) -> None:
+    global WEB_BASE
+    WEB_BASE = (url or "").rstrip("/")
+
+
+def run_link(run_id, label: str | None = None) -> Text:
+    """A run, as something you can click through to.
+
+    Rich's own [link=] sets a terminal hyperlink, which Textual does not
+    act on — so the click is an action in the app, and the OSC 8 link is
+    set too for terminals that handle those themselves.
+    """
+    label = label or f"run {run_id}"
+    if not WEB_BASE or not run_id:
+        return Text(label, style="dim")
+    url = f"{WEB_BASE}/runs/{run_id}"
+    return Text(label, style=Style(meta={"@click": f"app.open_url({url!r})"}, link=url, dim=True, underline=True))
+
+
+def with_link(markup: str, run_id) -> Text:
+    """A rendered line with the run it belongs to on the end of it."""
+    line = Text.from_markup(markup)
+    if run_id:
+        line.append("  ")
+        line.append_text(run_link(run_id))
+    return line
 
 
 def ended_lines(run: dict) -> list[str]:
@@ -272,16 +311,22 @@ def ended_lines(run: dict) -> list[str]:
     message on the row."""
     status = run.get("status")
     if status == "failed":
-        return event_lines("error", {"error": (run.get("failure_metadata") or {}).get("error") or "run failed"})
+        return event_lines("error", {
+            "error": (run.get("failure_metadata") or {}).get("error") or "run failed",
+            "run_id": run.get("id"),
+        })
     if status == "completed":
-        return event_lines("completed", {"output": ""})
+        return event_lines("completed", {"output": "", "run_id": run.get("id")})
     return []
 
 
 def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """A live channel event as chat lines, Rich markup."""
     if event == "agent_started":
-        return [f"[dim]— run {payload.get('run_id')} started —[/dim]"]
+        started = Text.from_markup("[dim]— [/dim]")
+        started.append_text(run_link(payload.get("run_id")))
+        started.append_text(Text.from_markup("[dim] started —[/dim]"))
+        return [started]
     if event == "llm_response":
         lines = []
         content = text_of(payload.get("content"))
@@ -303,9 +348,11 @@ def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | N
         return [f"[dim]◔ waiting {payload.get('seconds')}s[/dim]"]
     if event == "completed":
         out = text_of(payload.get("output")).strip()
-        return (["", Md(out)] if out else []) + ["", "[green]✓ done[/green]"]
+        done = with_link("[green]✓ done[/green]", payload.get("run_id"))
+        return (["", Md(out)] if out else []) + ["", done]
     if event == "error":
-        return [f"[red]✗ {escape(text_of(payload.get('error')))}[/red]"]
+        failed = with_link(f"[red]✗ {escape(text_of(payload.get('error')))}[/red]", payload.get("run_id"))
+        return [failed]
     if event == "context_compacted":
         return [f"[dim]… compacted {payload.get('dropped')} messages into the summary[/dim]"]
     if event == "agent_resumed":

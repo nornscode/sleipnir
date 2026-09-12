@@ -32,6 +32,7 @@ from sleipnir.render import (
     permission_details,
     permission_in_question,
     run_event_lines,
+    set_web_base,
     space_label,
     spaces_lines,
     text_of,
@@ -118,12 +119,14 @@ class SleipnirApp(App):
     #tabs { height: 1fr; }
     RichLog { height: 1fr; padding: 0 2; }
 
-    /* One row to type on and one to read: the window is for the session,
-       not for its furniture. */
-    #promptline { height: 1; margin: 1 1 0 1; }
+    /* No boxes, and a blank row on either side of the prompt: what made
+       the old chrome feel tight was five rows of it, not the spacing. The
+       caret lines up with the transcript's own left edge. */
+    #promptline { height: 1; margin: 1 2 0 2; }
     #caret { width: 2; color: $success; }
     #prompt { border: none; height: 1; padding: 0; background: transparent; }
-    #statusline { height: 1; padding: 0 2; }
+    #prompt:focus { border: none; background: transparent; }
+    #statusline { height: 1; margin: 1 0 0 0; padding: 0 2; }
     #keys, #state { color: $text-muted; height: 1; }
     #state { width: 1fr; text-align: right; }
     """
@@ -193,6 +196,7 @@ class SleipnirApp(App):
 
     async def on_mount(self) -> None:
         self.title = f"sleipnir · {self.root.name}"
+        set_web_base(self.api.url)
         self.query_one("#keys", Static).update(self.KEYS)
         if self.worker_thread is not None:
             self.worker_thread.start()
@@ -463,7 +467,7 @@ class SleipnirApp(App):
             if e.get("event_type") == "tool_result":
                 payload = e.get("payload") or {}
                 self._learn_permission(tab, payload.get("name"), payload.get("content"))
-        self.log_lines(tab, run_event_lines(events, tab.permissions))
+        self.log_lines(tab, run_event_lines(events, tab.permissions, run_id=run.get("id")))
 
     def _learn_permission(self, tab: Tab, name, content) -> None:
         if name in ("bash", "write_file", "edit_file") and isinstance(content, str):
@@ -850,6 +854,14 @@ class SleipnirApp(App):
             log.write(f"[dim]a new session in {where}; type to start it[/dim]")
         tabs.active = "new"
         self._focus_default()
+
+    def action_open_url(self, url: str) -> None:
+        """A run in the transcript, opened in the dashboard.
+
+        Textual resolves the action `app.open_url(...)` to this; App has a
+        plain open_url method, which an action string never reaches.
+        """
+        self.open_url(url)
 
     def action_refresh(self) -> None:
         self.refresh_sessions()

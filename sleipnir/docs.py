@@ -49,8 +49,11 @@ in front of the developer right now. Its layout:
 - The box along the bottom is where the user types. What they write
   there becomes your next message, and when you ask something with
   ask_human their next line is the answer.
-- The status bar under it counts spaces, sessions, how many are working
-  and how many need the user, then names this checkout and the agent.
+- The row under it carries the keys on the left and, on the right, what
+  the sidebar cannot say: where you are, and whether anything is waiting.
+- Every run in the transcript is a link: "done", a failure, and the line
+  that starts a run all open that run's page in the Norns dashboard,
+  where the whole event log is. Click it, or tell the user it is there.
 
 Commands the user types in that box (they are the client's, not yours):
 

@@ -548,3 +548,31 @@ async def test_the_window_is_mostly_the_session():
         assert not app.query(Footer)
         chrome = app.query_one("#promptline").size.height + app.query_one("#statusline").size.height
         assert chrome == 2
+
+
+@pytest.mark.asyncio
+async def test_a_run_in_the_transcript_opens_the_dashboard():
+    """The click action has to name something Textual can resolve: App has
+    open_url, but an action string reaches action_open_url or nothing."""
+    from textual.widgets import RichLog
+
+    app, _ = make_app()
+    opened = []
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause(0.3)
+        app.open_url = lambda url, **kw: opened.append(url)
+        app.query_one(TabbedContent).active = "s1"
+        await pilot.pause(0.4)
+
+        actions = [
+            meta["@click"]
+            for strip in app.query_one("#log-1", RichLog).lines
+            for seg in strip
+            if (meta := (seg.style.meta if seg.style else {}) or {}).get("@click")
+        ]
+        assert actions, "no run in the transcript was clickable"
+        assert "http://norns.test/runs/" in actions[0]
+
+        await app.run_action(actions[0])
+        await pilot.pause(0.2)
+        assert opened and opened[0].startswith("http://norns.test/runs/")

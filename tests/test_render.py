@@ -40,9 +40,12 @@ def test_message_and_event_lines():
     assert event_lines("llm_response", {"content": "", "tool_calls": [{"name": "ask_human", "arguments": {"question": "q"}}]}) == []
     assert event_lines("tool_result", {"name": "ask_human", "content": "always"}) == ["", "[b green]›[/] always"]
     assert event_lines("tool_result", {"name": "bash", "content": "permission required (token p-2)\nbash: ls", "is_error": True}) == []
-    assert event_lines("completed", {"output": "done\nmore"}) == ["", Md("done\nmore"), "", "[green]✓ done[/green]"]
-    assert event_lines("completed", {"output": ""}) == ["", "[green]✓ done[/green]"]
-    assert event_lines("error", {"error": "boom"}) == ["[red]✗ boom[/red]"]
+    completed = event_lines("completed", {"output": "done\nmore"})
+    assert completed[:3] == ["", Md("done\nmore"), ""]
+    assert str(completed[3]) == "✓ done"          # a Text now: it can carry a link
+    bare = event_lines("completed", {"output": ""})
+    assert bare[0] == "" and str(bare[1]) == "✓ done"
+    assert str(event_lines("error", {"error": "boom"})[0]) == "✗ boom"
     assert event_lines("context_compacted", {"dropped": 7}) == ["[dim]… compacted 7 messages into the summary[/dim]"]
     assert event_lines("tool_result", {"name": "bash", "content": "exit code: 0"}) == ["  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]"]
     assert event_lines("unknown", {}) == []
@@ -83,11 +86,11 @@ def test_run_event_lines_replays_a_run_in_flight():
         {"event_type": "tool_result", "payload": {"name": "bash", "content": "exit code: 0"}},
         {"event_type": "run_failed", "payload": {"error": "boom", "error_class": "x"}},
     ]
-    assert run_event_lines(events) == [
-        "[cyan]⚙ bash[/] ls",
-        "  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]",
-        "[red]✗ boom[/red]",
-    ]
+    replayed = run_event_lines(events)
+    # The tool call is still markup; the ending is a Text, so it can link.
+    assert replayed[0] == "[cyan]⚙ bash[/] ls"
+    assert replayed[1] == "  [dim]↳[/dim] [dim]bash: exit code: 0[/dim]"
+    assert str(replayed[2]) == "✗ boom"
 
 
 def test_spaces_lines():
@@ -112,3 +115,37 @@ def test_a_turn_cut_off_at_the_limit_says_so():
 
     whole = event_lines("llm_response", {"content": "all of it", "finish_reason": "stop"})
     assert not any("cut off" in str(line) for line in whole)
+
+
+def test_a_run_is_something_you_can_click_through_to():
+    """The transcript is a summary; the run page is the whole log."""
+    from sleipnir import render
+
+    render.set_web_base("http://localhost:4000/")
+    try:
+        def clicks(lines):
+            """The click actions Textual will run, one per linked span."""
+            out = []
+            for line in lines:
+                for span in getattr(line, "spans", []):
+                    meta = getattr(span.style, "meta", None) or {}
+                    if meta.get("@click"):
+                        out.append(meta["@click"])
+            return out
+
+        done = render.event_lines("completed", {"output": "", "run_id": 42})
+        assert str(done[1]) == "✓ done  run 42"
+        assert clicks(done) == ["app.open_url('http://localhost:4000/runs/42')"]
+
+        failed = render.event_lines("error", {"error": "boom", "run_id": 7})
+        assert clicks(failed) == ["app.open_url('http://localhost:4000/runs/7')"]
+
+        started = render.event_lines("agent_started", {"run_id": 9})
+        assert clicks(started) == ["app.open_url('http://localhost:4000/runs/9')"]
+    finally:
+        render.set_web_base("")
+
+    # Without a dashboard to point at, it is still readable text.
+    plain = render.event_lines("completed", {"output": "", "run_id": 42})
+    assert str(plain[1]) == "✓ done  run 42"
+    assert not [s for s in plain[1].spans if (getattr(s.style, "meta", None) or {}).get("@click")]

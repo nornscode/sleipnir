@@ -804,11 +804,21 @@ async def test_a_space_row_folds_its_sessions_away():
     app, api = make_app()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        node = space_node(app, 3)
-        assert node.is_expanded  # the space you are in opens on arrival
+        # Everything starts open: the whole shape at a glance is the point.
+        assert all(n.is_expanded for n in tree(app).root.children)
 
+        node = space_node(app, 3)
         await app.on_tree_node_selected(Tree.NodeSelected(node))
         await pilot.pause()
         assert not node.is_expanded
         # Folded away, not gone: the sessions are still there to come back to.
         assert session_ids_under(app, 3) == [1, 2]
+
+        # And a redraw honours the fold rather than reopening it.
+        api.session_list.append({
+            "id": 44, "key": "run_44", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3,
+            "status": "idle", "first_message": "later", "run": {"id": 60, "status": "completed", "waiting_for": None},
+        })
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        assert not space_node(app, 3).is_expanded

@@ -111,7 +111,7 @@ def tab_title(session: dict, width: int = 22) -> str:
 
 class SleipnirApp(App):
     CSS = """
-    #sidebar { width: 34; border-right: solid $primary-background; padding: 1 0 0 0; }
+    #sidebar { width: 36; border-right: solid $primary-background; padding: 1 1 0 2; }
     #sidebar > .tree--guides { color: $primary-background; }
     #sidebar > .tree--guides-selected { color: $primary-background; }
     #main { width: 1fr; }
@@ -171,6 +171,10 @@ class SleipnirApp(App):
         # Gards destroyed since we last looked: no worker can ever
         # claim one again, so neither it nor its sessions are reachable.
         self.closed_gards: set[int] = set()
+        # Spaces the user has folded away. Everything starts open — the
+        # point of the tree is seeing the whole shape — so this records
+        # only what they chose to hide, and a redraw honours it.
+        self.collapsed_spaces: set[int] = set()
         # Sessions whose tab was closed locally (ctrl+w / /close): the
         # session lives on in Norns, so the next poll would otherwise
         # bring the tab straight back. Cleared when the space holding it
@@ -387,15 +391,13 @@ class SleipnirApp(App):
 
         existing = {n.data["gard_id"]: n for n in root.children if isinstance(n.data, dict)}
         if list(existing) != [sp.gard_id for sp in spaces]:
-            # Membership changed; rebuild, remembering what was open.
-            was_expanded = {gid for gid, n in existing.items() if n.is_expanded}
             root.remove_children()
             existing = {}
             for sp in spaces:
                 node = root.add(
                     space_row(sp.name, sp.sessions, sp.status, here=sp.here),
                     data={"gard_id": sp.gard_id},
-                    expand=sp.gard_id in was_expanded or sp.gard_id == self.current_space,
+                    expand=sp.gard_id not in self.collapsed_spaces,
                 )
                 existing[sp.gard_id] = node
         else:
@@ -573,6 +575,14 @@ class SleipnirApp(App):
                 key = await self.open_pane_for(space.sessions[0])
                 self._set_active_pane(key)
         await self._ensure_loaded(self.active_pane)
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        if isinstance(event.node.data, dict) and "session_id" not in event.node.data:
+            self.collapsed_spaces.discard(event.node.data["gard_id"])
+
+    def on_tree_node_collapsed(self, event: Tree.NodeCollapsed) -> None:
+        if isinstance(event.node.data, dict) and "session_id" not in event.node.data:
+            self.collapsed_spaces.add(event.node.data["gard_id"])
 
     async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """A space toggles open; a session comes to the front."""

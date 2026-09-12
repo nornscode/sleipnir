@@ -15,9 +15,11 @@ in front of the developer right now. Its layout:
 
 - The left column is a tree of the **spaces**: one per repository
   checkout with a worker running in it, this one first, each showing
-  whether it has a worker and what its sessions are doing. Sessions that
-  no gard serve share a "no gard" space. A space with no worker says so
-  in red — nothing it is told can run until one starts.
+  whether it has a worker and what its sessions are doing. A space with
+  no worker says so in red — nothing it is told can run until one starts.
+  Runs with no gard belong to other agents on this Norns and are not
+  listed; the exception is a worker started with --no-gard, which serves
+  exactly those and so is shown them.
 - A space is created by running `sleip` in a checkout, and no other
   way: on first start there it creates that repository's gard and
   remembers it in ~/.sleipnir/gards.json. There is no command for it,

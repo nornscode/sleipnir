@@ -17,7 +17,8 @@ class FakeApi:
 
     def __init__(self):
         self.calls = []
-        self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"}]
+        self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"},
+                          {"id": 9, "name": "desktop", "status": "ready"}]
         self.destroy_conflict = False
         self.archive_conflict = False
         self.archived_list: list[dict] = []
@@ -28,8 +29,12 @@ class FakeApi:
                                             "waiting_for": {"question": "Allow bash `rm -rf build`? (yes / always / no) [p-ab12cd]"}}},
             {"id": 1, "key": "run_1", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "idle",
              "first_message": "fix the tests", "run": {"id": 9, "status": "completed", "waiting_for": None}},
-            {"id": 7, "key": "run_7", "agent_id": 8, "agent_name": "my-agent", "gard_id": None, "status": "idle",
+            {"id": 7, "key": "run_7", "agent_id": 8, "agent_name": "my-agent", "gard_id": 9, "status": "idle",
              "first_message": "Hello! What can you do?", "run": {"id": 30, "status": "completed", "waiting_for": None}},
+            # Someone else's agent on this Norns: no gard, no checkout, and
+            # no business in a coding client's tree.
+            {"id": 50, "key": "chat", "agent_id": 11, "agent_name": "mimir", "gard_id": None, "status": "idle",
+             "first_message": "what is the weather", "run": {"id": 70, "status": "completed", "waiting_for": None}},
         ]
 
     async def sessions(self, limit=100, *, archived=False):
@@ -175,15 +180,15 @@ async def test_spaces_tabs_send_reply_and_fork():
     app, api = make_app()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        # This checkout's space first, the no-gard bucket last.
-        assert [n.data["gard_id"] for n in tree(app).root.children] == [3, 0]
-        assert "laptop" in space_names(app)[0] and "no gard" in space_names(app)[1]
+        # This checkout's space first; no "no gard" bucket at all.
+        assert [n.data["gard_id"] for n in tree(app).root.children] == [3, 9]
+        assert "laptop" in space_names(app)[0] and "desktop" in space_names(app)[1]
         assert app.current_space == 3 and app.agent_id == 5
 
         # Every space lists its own sessions, oldest first — including the
         # ones in the space we are not in. That is the point of the tree.
         assert session_ids_under(app, 3) == [1, 2]
-        assert session_ids_under(app, 0) == [7]
+        assert session_ids_under(app, 9) == [7]
         # Only the one on screen has a pane; panes are made on demand.
         assert app.active_pane == "s2"
         assert app.stream.joined == [5]
@@ -247,7 +252,7 @@ async def test_spaces_tabs_send_reply_and_fork():
 
         # Opening a session in the other space brings it to the front; the
         # one we were reading keeps its pane and its transcript.
-        await app.select_space(0)
+        await app.select_space(9)
         await show(app, 7)
         await pilot.pause(0.3)
         assert app.active_pane == "s7"
@@ -261,7 +266,7 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause(0.3)
         assert ("delete", 8, "run_7") in api.calls
         assert "s7" not in app.tabs and 7 not in app.sessions
-        assert 7 not in session_ids_under(app, 0)
+        assert 7 not in session_ids_under(app, 9)
 
 
 @pytest.mark.asyncio
@@ -345,7 +350,7 @@ async def test_closing_a_tab_keeps_it_closed_across_a_poll():
 
         # Re-selecting the space (its own or, here, round-tripping through
         # the other one) is what brings a closed session back.
-        await app.select_space(0)
+        await app.select_space(9)
         await pilot.pause(0.3)
         await app.select_space(3)
         await pilot.pause(0.3)
@@ -446,7 +451,7 @@ async def test_an_archived_session_stays_gone_and_comes_back_whole():
         # and neither can re-selecting the space.
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
-        await app.select_space(0)
+        await app.select_space(9)
         await pilot.pause(0.3)
         await app.select_space(3)
         await pilot.pause(0.3)
@@ -779,18 +784,18 @@ async def test_every_space_shows_its_sessions_and_you_can_cross_between_them():
 
         # Both spaces list their own sessions without being selected first.
         assert session_ids_under(app, 3) == [1, 2]
-        assert session_ids_under(app, 0) == [7]
+        assert session_ids_under(app, 9) == [7]
 
         await show(app, 1)
         await pilot.pause(0.3)
         assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
 
         # Straight to a session in the other space — no select-then-find.
-        node = space_node(app, 0).children[0]
+        node = space_node(app, 9).children[0]
         await app.on_tree_node_selected(Tree.NodeSelected(node))
         await pilot.pause(0.3)
         assert app.active_pane == "s7"
-        assert app.current_space == 0
+        assert app.current_space == 9
 
         # And back: the first session kept its pane and its history.
         await show(app, 1)
@@ -822,3 +827,29 @@ async def test_a_space_row_folds_its_sessions_away():
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
         assert not space_node(app, 3).is_expanded
+
+
+@pytest.mark.asyncio
+async def test_other_peoples_agents_stay_out_of_a_coding_clients_tree():
+    """A run with no gard belongs to some other agent on this Norns — a
+    bot, a connector, a chat. Sleipnir is a coding client, not a Norns
+    console, so it does not list them."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert 50 in {s["id"] for s in api.session_list}  # Norns has it
+        assert 0 not in [n.data["gard_id"] for n in tree(app).root.children]
+        assert 50 not in [c.data["session_id"] for n in tree(app).root.children for c in n.children]
+
+
+@pytest.mark.asyncio
+async def test_a_no_gard_worker_still_sees_what_it_serves():
+    """The exception: `sleip serve --no-gard` serves exactly those runs, so
+    hiding them would leave that worker's client blank."""
+    api = FakeApi()
+    app = SleipnirApp(api, agent_name="sleipnir", gard_id=None, root=Path("/tmp/repo"),
+                      stream=FakeStream(), poll_seconds=60)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert 0 in [n.data["gard_id"] for n in tree(app).root.children]
+        assert session_ids_under(app, 0) == [50]

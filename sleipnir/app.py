@@ -318,6 +318,13 @@ class SleipnirApp(App):
             gid = s.get("gard_id") or NO_GARD
             if gid in self.closed_gards or s["id"] in self.closed_sessions:
                 continue
+            # A run with no gard belongs to some other agent on this Norns —
+            # a connector, a bot, a chat — not to a checkout anyone is
+            # editing. Sleipnir is a coding client, not a Norns console, so
+            # they stay out of the tree. The exception is a worker running
+            # --no-gard: those runs are exactly the ones it serves.
+            if gid == NO_GARD and self.gard_id is not None:
+                continue
             if gid not in spaces:
                 spaces[gid] = self._space(gid)
             spaces[gid].sessions.append(s)

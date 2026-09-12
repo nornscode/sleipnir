@@ -21,11 +21,15 @@ def test_title_and_text():
 
 
 def test_session_row_status():
-    s = {"id": 1, "first_message": "hi", "agent_name": "sleipnir", "status": "awaiting_tools", "gard_id": 7, "run": {}}
-    assert "◑" in session_row(s) and "hi" in session_row(s)
+    working = session_row({"id": 1, "first_message": "hi", "status": "awaiting_tools", "run": {}})
+    assert "hi" in working and "cyan" in working
     # A parked run shows as needing you even when its process is idle.
-    s = {"id": 1, "first_message": "hi", "agent_name": "a", "status": "stopped", "run": {"status": "waiting"}}
-    assert "●" in session_row(s)
+    parked = session_row({"id": 1, "first_message": "hi", "status": "stopped", "run": {"status": "waiting"}})
+    assert "yellow" in parked
+    # A quiet session is not coloured at all, so the two that want the eye
+    # are the only two that get it.
+    quiet = session_row({"id": 1, "first_message": "hi", "status": "idle", "run": {}})
+    assert "cyan" not in quiet and "yellow" not in quiet
     # Long titles are cut to fit a sidebar, not wrapped.
     assert session_row({"first_message": "x" * 40}).endswith("…")
 
@@ -63,21 +67,21 @@ def test_message_and_event_lines():
 
 
 def test_a_space_and_a_session_do_not_look_alike():
-    """Shape says what kind of row it is — squares are places, circles are
-    conversations — so an indented session is never mistaken for a space."""
+    """Outlined geometry could not carry this: ▢ beside ○ is one small
+    hollow shape beside another. The icon names the kind, and it is the
+    same icon whatever the row is doing."""
     busy_space = space_row("laptop", [{"status": "awaiting_llm"}])
-    busy_session = session_row({"first_message": "hi", "status": "awaiting_llm"})
+    quiet_space = space_row("empty", [])
+    broken_space = space_row("laptop", [], "pending", here=True)
+    session = session_row({"first_message": "hi", "status": "awaiting_llm"})
 
-    assert "▣" in busy_space and "laptop" in busy_space and "1 working" in busy_space
-    assert "◐" in busy_session
-    # No circle in a space row, no square in a session row.
-    assert not any(c in busy_space for c in "○◐◑●◔")
-    assert not any(c in busy_session for c in "▢▣")
+    assert all("📁" in row for row in (busy_space, quiet_space, broken_space))
+    assert "💬" in session
+    assert "📁" not in session and "💬" not in busy_space
 
-    # A space needing attention still reads as a space.
+    assert "laptop" in busy_space and "1 working" in busy_space
     waiting = space_row("laptop", [{"status": "idle", "run": {"status": "waiting"}}])
-    assert "▣" in waiting and "1 need you" in waiting
-    assert "▢" in space_row("empty", [])
+    assert "1 need you" in waiting
 
 
 def test_permission_prompt_from_the_workers_request():

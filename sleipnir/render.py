@@ -72,11 +72,13 @@ def title_of(session: dict) -> str:
 NO_WORKER = ("pending", "disconnected")
 
 
-# A space is a place, a session is a conversation, and at a glance the two
-# should not look alike. Shape carries the kind — squares for spaces,
-# circles for the sessions under them — while fill and colour carry state,
-# so one glyph does both jobs and neither costs a column.
-SPACE_IDLE, SPACE_BUSY = "▢", "▣"
+# A space is a place on disk; a session is a conversation in it. Outlined
+# geometry could not tell them apart — ▢ beside ○ is one small hollow shape
+# beside another in a mono font — so the kind is an emoji, which differs in
+# weight and colour and not just in outline. State is carried by the colour
+# of the text beside it, so the icon never has to mean two things.
+SPACE_ICON = "📁"
+SESSION_ICON = "💬"
 
 
 def space_row(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
@@ -85,28 +87,37 @@ def space_row(name: str, sessions: list[dict], status: str | None = None, *, her
         # Two situations, not one: the remedy exists only when the checkout
         # is on this machine, and saying so is what stops a fruitless /start.
         remedy = "— /start" if here else "· elsewhere"
-        return f"[red]{SPACE_IDLE}[/] [b]{escape(name)}[/b] [red]no worker {remedy}[/]"
+        return f"{SPACE_ICON} [b red]{escape(name)}[/] [red]no worker {remedy}[/]"
     waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
     working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
     if waiting:
-        return f"[yellow]{SPACE_BUSY}[/] [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
+        return f"{SPACE_ICON} [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
     if working:
-        return f"[cyan]{SPACE_BUSY}[/] [b]{escape(name)}[/b] [dim]{working} working[/dim]"
-    return f"[dim]{SPACE_IDLE}[/] [b]{escape(name)}[/b] [dim]{len(sessions)}[/dim]"
+        return f"{SPACE_ICON} [b]{escape(name)}[/b] [cyan]{working} working[/]"
+    return f"{SPACE_ICON} [b]{escape(name)}[/b] [dim]{len(sessions)}[/dim]"
 
 
-def session_row(session: dict, width: int = 26) -> str:
+# What a session's own state colours its line: nothing for the quiet ones,
+# so the two that want the eye are the only two that get it.
+SESSION_COLOUR = {
+    "running": "cyan", "awaiting_llm": "cyan", "awaiting_tools": "cyan",
+    "waiting": "yellow",
+}
+
+
+def session_row(session: dict, width: int = 24) -> str:
     """A session as one line under its space: what it is about, and what it
     is doing right now."""
     status = session.get("status") or "stopped"
     run = session.get("run") or {}
     if status in ("stopped", "idle") and run.get("status") == "waiting":
         status = "waiting"
-    glyph, colour = STATUS_GLYPH.get(status, STATUS_GLYPH["unknown"])
     title = title_of(session)
     if len(title) > width:
         title = title[: width - 1] + "…"
-    return f"[{colour}]{glyph}[/] {escape(title)}"
+    colour = SESSION_COLOUR.get(status)
+    body = f"[{colour}]{escape(title)}[/]" if colour else escape(title)
+    return f"{SESSION_ICON} {body}"
 
 
 GARD_STATE = {

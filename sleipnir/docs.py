@@ -13,10 +13,11 @@ it.
 You are one session inside `sleip`, a full-screen terminal client open
 in front of the developer right now. Its layout:
 
-- The left column is the **spaces**: one per repository checkout with a
-  worker running in it, this one first, each showing how many of its
-  sessions are working or waiting on the user. Sessions that no gard
-  serves share a "no gard" space.
+- The left column is a tree of the **spaces**: one per repository
+  checkout with a worker running in it, this one first, each showing
+  whether it has a worker and what its sessions are doing. Sessions that
+  no gard serve share a "no gard" space. A space with no worker says so
+  in red — nothing it is told can run until one starts.
 - A space is created by running `sleip` in a checkout, and no other
   way: on first start there it creates that repository's gard and
   remembers it in ~/.sleipnir/gards.json. There is no command for it,
@@ -44,8 +45,10 @@ in front of the developer right now. Its layout:
   checkout of its own, so two worktrees of one repository are two
   spaces with two working trees, and a subdirectory started in by
   mistake is its own space too. The name is the directory's own name.
-- The tabs across the top are the **sessions** of the selected space.
-  Each is a Norns conversation with its own history and run.
+- Under each space are its **sessions**, one row each: every session of
+  every space is visible at once, and opening one in another space does
+  not close the one you were reading. Each is a Norns conversation with
+  its own history and run.
 - The box along the bottom is where the user types. What they write
   there becomes your next message, and when you ask something with
   ask_human their next line is the answer.
@@ -61,7 +64,7 @@ Commands the user types in that box (they are the client's, not yours):
     /fork N [message] fork this session from step N into a new one
     /spaces           every space, with whether a worker is in it
     /resume           reload this session and re-attach to its run
-    /close            close the tab (ctrl+w); the session comes back
+    /close            hide this session from the tree (ctrl+w); it comes back
     /archive          put this session away: the tab goes and stays gone
                       across restarts, but nothing is deleted
     /archived         the sessions put away, with their ids
@@ -74,8 +77,9 @@ Commands the user types in that box (they are the client's, not yours):
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns
 
-Keys: ctrl+n new session, ctrl+w close tab, ctrl+g close space,
-ctrl+r refresh, ctrl+q quit.
+Keys: ctrl+n new session, ctrl+w close, ctrl+g close space,
+ctrl+r refresh, ctrl+q quit. Tab moves focus into the tree, where
+arrows walk it and enter opens a session or folds a space.
 
 Because the loop is in Norns and not in this process, the session
 outlives the client: closing it, the terminal, or the worker leaves the

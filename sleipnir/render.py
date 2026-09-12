@@ -86,6 +86,34 @@ def session_label(session: dict, gard_names: dict[int, str] | None = None) -> st
 NO_WORKER = ("pending", "disconnected")
 
 
+def space_row(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
+    """A space as one line of a tree. Same facts as `space_label`, on one
+    row, because a tree node has no second line to put them on."""
+    if status in NO_WORKER:
+        return f"[red]○[/] [b]{escape(name)}[/b] [red]no worker{' — /start' if here else ''}[/]"
+    waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
+    working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
+    if waiting:
+        return f"[yellow]●[/] [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
+    if working:
+        return f"[cyan]◐[/] [b]{escape(name)}[/b] [dim]{working} working[/dim]"
+    return f"[dim]○[/] [b]{escape(name)}[/b] [dim]{len(sessions)}[/dim]"
+
+
+def session_row(session: dict, width: int = 26) -> str:
+    """A session as one line under its space: what it is about, and what it
+    is doing right now."""
+    status = session.get("status") or "stopped"
+    run = session.get("run") or {}
+    if status in ("stopped", "idle") and run.get("status") == "waiting":
+        status = "waiting"
+    glyph, colour = STATUS_GLYPH.get(status, STATUS_GLYPH["unknown"])
+    title = title_of(session)
+    if len(title) > width:
+        title = title[: width - 1] + "…"
+    return f"[{colour}]{glyph}[/] {escape(title)}"
+
+
 def space_label(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
     """One sidebar row for a space: its name and what its sessions are doing.
 

@@ -19,7 +19,7 @@ def test_docs_name_every_slash_command():
 
 
 def test_docs_describe_the_client():
-    for word in ("spaces", "sessions", "tabs", "ctrl+n"):
+    for word in ("spaces", "sessions", "tree", "ctrl+n"):
         assert word in DOCS, word
 
 

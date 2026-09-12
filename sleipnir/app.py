@@ -20,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from rich.markdown import Markdown
 from rich.markup import escape
-from textual.widgets import Input, Label, ListItem, ListView, OptionList, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import ContentSwitcher, Input, OptionList, RichLog, Static, Tree
 
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
@@ -34,7 +34,8 @@ from sleipnir.render import (
     permission_in_question,
     run_event_lines,
     set_web_base,
-    space_label,
+    session_row,
+    space_row,
     spaces_lines,
     text_of,
     title_of,
@@ -46,7 +47,7 @@ logger = logging.getLogger("sleipnir.app")
 
 NO_GARD = 0
 
-HELP = """[b]sleipnir[/b] — spaces on the left (one per checkout with a worker), the sessions of the selected space as tabs.
+HELP = """[b]sleipnir[/b] — on the left, every space (one per checkout with a worker) with its sessions under it. Click a space to fold it, a session to open it.
 Type to talk to the session you are in; when the agent asks a question, your next line answers it.
 The worker runs beside this window, not inside it, so leaving does not stop the work.
 
@@ -54,7 +55,7 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /fork N [message] fork the current session from step N into a new one
   /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
-  /close            close the current tab (ctrl+w); the session comes back
+  /close            hide this session from the tree (ctrl+w); it comes back
   /archive          put this session away: the tab goes and stays gone,
                     but nothing is deleted
   /archived         the sessions you have put away
@@ -68,7 +69,7 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /quit             stop looking (ctrl+q). The worker keeps this space
                     open; `sleip stop` closes it in this checkout
 
-Keys: ctrl+n new session · ctrl+w close tab · ctrl+g close space · ctrl+r refresh · ctrl+q quit"""
+Keys: ctrl+n new session · ctrl+w close · ctrl+g close space · ctrl+r refresh · ctrl+q quit · tab moves focus to the tree, then arrows and enter"""
 
 
 @dataclass
@@ -103,20 +104,6 @@ class Space:
     here: bool = False
 
 
-class SpaceItem(ListItem):
-    def __init__(self, space: Space):
-        self.space = space
-        self.markup = space_label(space.name, space.sessions, space.status, here=space.here)
-        super().__init__(Label(self.markup, markup=True))
-
-    def refresh_space(self, space: Space) -> None:
-        self.space = space
-        markup = space_label(space.name, space.sessions, space.status, here=space.here)
-        if markup != self.markup:
-            self.markup = markup
-            self.query_one(Label).update(markup)
-
-
 def tab_title(session: dict, width: int = 22) -> str:
     title = title_of(session)
     return title if len(title) <= width else title[: width - 1] + "…"
@@ -124,10 +111,11 @@ def tab_title(session: dict, width: int = 22) -> str:
 
 class SleipnirApp(App):
     CSS = """
-    #sidebar { width: 28; border-right: solid $primary-background; }
-    #sidebar ListItem { padding: 0 1; }
+    #sidebar { width: 34; border-right: solid $primary-background; padding: 1 0 0 0; }
+    #sidebar > .tree--guides { color: $primary-background; }
+    #sidebar > .tree--guides-selected { color: $primary-background; }
     #main { width: 1fr; }
-    #tabs { height: 1fr; }
+    #panes { height: 1fr; }
     RichLog { height: 1fr; padding: 0 2; }
 
     /* No boxes, and a blank row on either side of the prompt: what made
@@ -197,9 +185,12 @@ class SleipnirApp(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield ListView(id="sidebar")
+            tree: Tree = Tree("spaces", id="sidebar")
+            tree.show_root = False
+            tree.guide_depth = 2
+            yield tree
             with Vertical(id="main"):
-                yield TabbedContent(id="tabs")
+                yield ContentSwitcher(id="panes")
                 yield PermissionPrompt()
                 with Horizontal(id="promptline"):
                     yield Static("›", id="caret", markup=False)
@@ -266,7 +257,6 @@ class SleipnirApp(App):
 
         self.sessions = {s["id"]: s for s in sessions}
         self.spaces = self._group_spaces(sessions)
-        await self._render_sidebar()
 
         if self.current_space is None or self.current_space not in self.spaces:
             self.current_space = next(iter(self.spaces), None)
@@ -276,9 +266,9 @@ class SleipnirApp(App):
         if self._pending_key:
             for s in sessions:
                 if s["key"] == self._pending_key:
-                    self._pending_key = None
                     await self.close_new_tab()
                     await self.open_session(s, replay=False)
+                    self._pending_key = None
                     if self._pending_text:
                         started = self.tabs[f"s{s['id']}"]
                         started.shown_user_run = (s.get("run") or {}).get("id")
@@ -334,21 +324,100 @@ class SleipnirApp(App):
             return (gid != self.gard_id, gid == NO_GARD, latest and "~" or "", "")
         return dict(sorted(spaces.items(), key=lambda item: (item[0] != self.gard_id, item[0] == NO_GARD, -len(item[1].sessions))))
 
-    async def _render_sidebar(self) -> None:
-        listview = self.query_one("#sidebar", ListView)
-        items = list(listview.query(SpaceItem))
-        spaces = list(self.spaces.values())
-        if [i.space.gard_id for i in items] == [sp.gard_id for sp in spaces]:
-            for item, space in zip(items, spaces):
-                item.refresh_space(space)
+    # -- panes ---------------------------------------------------------------
+    #
+    # One RichLog per session that has been opened, switched by the tree.
+    # A pane outlives the selection so a session keeps its transcript, and
+    # keeps receiving lines, while you are looking at another one.
+
+    # A pane's widget id is the transcript's: `log-<session id>`, or
+    # `log-new`. The key `self.tabs` uses is the older `s<id>` / `new`.
+
+    @staticmethod
+    def _log_id(key: str) -> str:
+        return "log-new" if key == "new" else f"log-{key[1:]}"
+
+    @staticmethod
+    def _tab_key(log_id: str | None) -> str | None:
+        if not log_id:
+            return None
+        return "new" if log_id == "log-new" else f"s{log_id[len('log-'):]}"
+
+    @property
+    def active_pane(self) -> str | None:
+        """The key in `self.tabs` of the session on screen."""
+        try:
+            return self._tab_key(self.query_one("#panes", ContentSwitcher).current)
+        except Exception:
+            return None
+
+    def _set_active_pane(self, key: str | None) -> None:
+        try:
+            self.query_one("#panes", ContentSwitcher).current = self._log_id(key) if key else None
+        except Exception:
+            pass
+
+    async def _add_pane(self, key: str) -> None:
+        panes = self.query_one("#panes", ContentSwitcher)
+        log_id = self._log_id(key)
+        if panes.query(f"#{log_id}"):
             return
-        await listview.clear()
+        await panes.mount(RichLog(wrap=True, markup=True, highlight=False, id=log_id))
+
+    async def _remove_pane(self, key: str) -> None:
+        panes = self.query_one("#panes", ContentSwitcher)
+        log_id = self._log_id(key)
+        if panes.current == log_id:
+            panes.current = None
+        for widget in panes.query(f"#{log_id}"):
+            await widget.remove()
+
+    # -- the tree ------------------------------------------------------------
+
+    async def _render_sidebar(self) -> None:
+        """Spaces, each expanding to its sessions.
+
+        Rebuilt in place: nodes are matched by what they stand for, so an
+        expanded space stays expanded and the cursor stays where it was
+        across a poll.
+        """
+        tree = self.query_one("#sidebar", Tree)
+        root = tree.root
+        spaces = list(self.spaces.values())
+
+        existing = {n.data["gard_id"]: n for n in root.children if isinstance(n.data, dict)}
+        if list(existing) != [sp.gard_id for sp in spaces]:
+            # Membership changed; rebuild, remembering what was open.
+            was_expanded = {gid for gid, n in existing.items() if n.is_expanded}
+            root.remove_children()
+            existing = {}
+            for sp in spaces:
+                node = root.add(
+                    space_row(sp.name, sp.sessions, sp.status, here=sp.here),
+                    data={"gard_id": sp.gard_id},
+                    expand=sp.gard_id in was_expanded or sp.gard_id == self.current_space,
+                )
+                existing[sp.gard_id] = node
+        else:
+            for sp in spaces:
+                existing[sp.gard_id].set_label(space_row(sp.name, sp.sessions, sp.status, here=sp.here))
+
         for sp in spaces:
-            await listview.append(SpaceItem(sp))
-        for i, sp in enumerate(spaces):
-            if sp.gard_id == self.current_space:
-                listview.index = i
-                break
+            self._render_sessions(existing[sp.gard_id], sp)
+
+    def _render_sessions(self, node, space: Space) -> None:
+        """A space's sessions, newest last so the list reads like history."""
+        wanted = list(reversed(space.sessions))
+        have = [c for c in node.children if isinstance(c.data, dict)]
+        if [c.data.get("session_id") for c in have] != [s["id"] for s in wanted]:
+            node.remove_children()
+            for s in wanted:
+                node.add_leaf(session_row(s), data={"gard_id": space.gard_id, "session_id": s["id"]})
+            return
+        for child, s in zip(have, wanted):
+            label = session_row(s)
+            if str(child.label) != label:
+                child.set_label(label)
 
     async def _learn_agents(self) -> None:
         for a in await self.api.agents():
@@ -369,10 +438,6 @@ class SleipnirApp(App):
     async def _learn_agent_and_gards(self) -> None:
         await self._learn_agents()
         await self._learn_gards()
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if isinstance(event.item, SpaceItem):
-            await self.select_space(event.item.space.gard_id)
 
     async def select_space(self, gard_id: int) -> None:
         if gard_id == self.current_space:
@@ -429,53 +494,60 @@ class SleipnirApp(App):
             self.notify(f"{name}: {message}", severity="error")
         return bool(pid)
 
+    async def open_pane_for(self, session: dict) -> str:
+        """Make sure a session has a transcript pane, and return its key.
+
+        Panes are made on demand — the tree shows every session of every
+        space, and mounting a log for all of them would cost more than it
+        buys. Once made, a pane stays: it keeps receiving lines while you
+        are reading something else.
+        """
+        key = f"s{session['id']}"
+        if key in self.tabs:
+            return key
+        run = session.get("run") or {}
+        # A session this client just started echoes its own first line. Both
+        # flags say so: it needs no history fetch, and its opening turn is
+        # already accounted for — without the second, the same "hello" is
+        # printed twice, once by the echo and once by the run appearing.
+        ours = session["key"] == self._pending_key
+        self.tabs[key] = Tab(
+            session_id=session["id"], agent_id=session["agent_id"], key=session["key"],
+            run_id=run.get("id"), title=tab_title(session),
+            loaded=ours, shown_user_run=run.get("id") if ours else None,
+        )
+        await self._add_pane(key)
+        await self.stream.join(session["agent_id"])
+        return key
+
     async def _sync_tabs(self, reset: bool = False) -> None:
-        """The tabs are the sessions of the current space, oldest on the left."""
-        tabs = self.query_one("#tabs", TabbedContent)
-        space = self.spaces.get(self.current_space) if self.current_space is not None else None
-        wanted = list(reversed(space.sessions)) if space else []
-        wanted_ids = [f"s{s['id']}" for s in wanted]
+        """Bring the tree and the open transcripts up to date.
 
-        if reset:
-            for pane_id in list(self.tabs):
-                if pane_id != "new":
-                    self.tabs.pop(pane_id, None)
-                    try:
-                        await tabs.remove_pane(pane_id)
-                    except Exception:
-                        pass
+        Unlike the tab bar this replaced, an open session is not tied to the
+        selected space: its pane keeps its history and keeps taking lines
+        wherever the cursor has wandered.
+        """
+        await self._render_sidebar()
 
-        for pane_id in list(self.tabs):
-            if pane_id != "new" and pane_id not in wanted_ids:
-                self.tabs.pop(pane_id, None)
-                try:
-                    await tabs.remove_pane(pane_id)
-                except Exception:
-                    pass
-
-        first_fill = not any(pid != "new" for pid in self.tabs)
-
-        for s in wanted:
-            pane_id = f"s{s['id']}"
-            run = s.get("run") or {}
-            if pane_id not in self.tabs:
-                # A session we just started echoes its own first line below;
-                # adding the pane posts TabActivated, whose handler would
-                # otherwise load the same message from the run in flight.
-                tab = Tab(
-                    session_id=s["id"], agent_id=s["agent_id"], key=s["key"], run_id=run.get("id"),
-                    title=tab_title(s), loaded=s["key"] == self._pending_key,
-                )
-                self.tabs[pane_id] = tab
-                log = RichLog(wrap=True, markup=True, highlight=False, id=f"log-{s['id']}")
-                await tabs.add_pane(TabPane(tab.title, log, id=pane_id))
-                await self.stream.join(s["agent_id"])
+        # A session that is gone from Norns takes its pane with it.
+        for key in list(self.tabs):
+            if key == "new":
                 continue
-            tab = self.tabs[pane_id]
+            sid = int(key[1:])
+            if sid not in self.sessions or sid in self.closed_sessions:
+                self.tabs.pop(key, None)
+                await self._remove_pane(key)
+
+        for key, tab in list(self.tabs.items()):
+            if key == "new":
+                continue
+            s = self.sessions.get(tab.session_id)
+            if s is None:
+                continue
+            run = s.get("run") or {}
             title = tab_title(s)
             if title != tab.title:
                 tab.title = title
-                self.set_tab_title(pane_id, title)
             if run.get("id") and run["id"] != tab.run_id:
                 tab.run_id = run["id"]
                 # Nothing on the wire carries the user's turn — agent_started
@@ -493,13 +565,33 @@ class SleipnirApp(App):
             elif run.get("status") != "waiting":
                 tab.question = None
 
-        if (reset or first_fill or not tabs.active or tabs.active not in self.tabs) and wanted_ids:
-            tabs.active = wanted_ids[-1]
-        await self._ensure_loaded(tabs.active)
+        # Nothing on screen: open the newest session of the current space,
+        # so a fresh client lands somewhere useful rather than on a blank.
+        if reset or self.active_pane is None or self.active_pane not in self.tabs:
+            space = self.spaces.get(self.current_space) if self.current_space is not None else None
+            if space and space.sessions:
+                key = await self.open_pane_for(space.sessions[0])
+                self._set_active_pane(key)
+        await self._ensure_loaded(self.active_pane)
 
-    async def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        await self._ensure_loaded(event.pane.id)
+    async def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """A space toggles open; a session comes to the front."""
+        data = event.node.data
+        if not isinstance(data, dict):
+            return
+        if "session_id" not in data:
+            await self.select_space(data["gard_id"])
+            event.node.toggle()
+            return
+        session = self.sessions.get(data["session_id"])
+        if session is None:
+            return
+        self.current_space = data["gard_id"]
+        key = await self.open_pane_for(session)
+        self._set_active_pane(key)
+        await self._ensure_loaded(key)
         self._update_prompt()
+        self._focus_default()
 
     async def _ensure_loaded(self, pane_id: str | None) -> None:
         """A tab's history is fetched the first time it is shown."""
@@ -573,29 +665,27 @@ class SleipnirApp(App):
                 tab.permissions[token] = (tool, subject)
 
     async def open_session(self, session: dict, *, replay: bool = True) -> None:
-        """Show a session: switch to its space if needed, activate its tab."""
+        """Show a session: move to its space and bring its pane to the front."""
         gid = session.get("gard_id") or NO_GARD
-        if gid != self.current_space:
+        if session["id"] not in self.sessions:
+            self.sessions[session["id"]] = session
+        if gid != self.current_space or session["id"] not in self.sessions:
             self.current_space = gid
-            self.spaces = self._group_spaces(list(self.sessions.values()))
-            await self._render_sidebar()
-            await self._sync_tabs(reset=True)
-        pane_id = f"s{session['id']}"
-        if pane_id not in self.tabs:
-            if session["id"] not in self.sessions:
-                self.sessions[session["id"]] = session
-                self.spaces = self._group_spaces(list(self.sessions.values()))
-            await self._sync_tabs()
-        tabs = self.query_one("#tabs", TabbedContent)
-        if pane_id in self.tabs:
-            tabs.active = pane_id
-            if not replay:
-                self.tabs[pane_id].loaded = True
-            await self._ensure_loaded(pane_id)
+        self.spaces = self._group_spaces(list(self.sessions.values()))
+        await self._render_sidebar()
+
+        key = await self.open_pane_for(session)
+        # replay=False is "we watched this happen": mark it loaded before
+        # anything can fetch it, or its opening turn prints a second time.
+        if not replay:
+            self.tabs[key].loaded = True
+            self.tabs[key].shown_user_run = (session.get("run") or {}).get("id")
+        self._set_active_pane(key)
+        await self._ensure_loaded(key)
         self._focus_default()
 
     def active_tab(self) -> Tab | None:
-        return self.tabs.get(self.query_one("#tabs", TabbedContent).active or "")
+        return self.tabs.get(self.active_pane or "")
 
     def _update_prompt(self) -> None:
         """The permission selector shows for a pending permission on the
@@ -739,10 +829,7 @@ class SleipnirApp(App):
     async def close_new_tab(self) -> None:
         if "new" in self.tabs:
             self.tabs.pop("new", None)
-            try:
-                await self.query_one("#tabs", TabbedContent).remove_pane("new")
-            except Exception:
-                pass
+            await self._remove_pane("new")
 
     async def command(self, text: str) -> None:
         try:
@@ -814,8 +901,7 @@ class SleipnirApp(App):
         """Put the current session away. The tab goes, and unlike /close it
         does not come back on restart — but nothing is deleted, and
         /archived brings it back."""
-        tabs = self.query_one("#tabs", TabbedContent)
-        pane_id = tabs.active
+        pane_id = self.active_pane
         tab = self.tabs.get(pane_id or "")
         if tab is None or tab.session_id == 0:
             self.notify("no session to archive", severity="warning")
@@ -830,7 +916,7 @@ class SleipnirApp(App):
             return
         self.sessions.pop(tab.session_id, None)
         self.tabs.pop(pane_id, None)
-        await tabs.remove_pane(pane_id)
+        await self._remove_pane(pane_id)
         self.spaces = self._group_spaces(list(self.sessions.values()))
         await self._render_sidebar()
         self.notify(f"archived “{tab.title}” — /archived to see it")
@@ -840,7 +926,7 @@ class SleipnirApp(App):
     async def show_archive(self) -> None:
         """`/archived`: the sessions put away, newest first, each with the
         command that brings it back."""
-        tab = self.tabs.get(self.query_one("#tabs", TabbedContent).active or "")
+        tab = self.tabs.get(self.active_pane or "")
         try:
             archived = await self.api.sessions(archived=True)
         except ApiError as e:
@@ -865,8 +951,7 @@ class SleipnirApp(App):
 
     async def delete_active_session(self) -> None:
         """Two /delete within ten seconds remove the session from Norns."""
-        tabs = self.query_one("#tabs", TabbedContent)
-        pane_id = tabs.active
+        pane_id = self.active_pane
         tab = self.tabs.get(pane_id or "")
         if tab is None or tab.session_id == 0:
             self.notify("no session to delete", severity="warning")
@@ -884,7 +969,7 @@ class SleipnirApp(App):
             return
         self.sessions.pop(tab.session_id, None)
         self.tabs.pop(pane_id, None)
-        await tabs.remove_pane(pane_id)
+        await self._remove_pane(pane_id)
         self.spaces = self._group_spaces(list(self.sessions.values()))
         await self._render_sidebar()
         self.notify(f"deleted “{tab.title}”")
@@ -961,8 +1046,7 @@ class SleipnirApp(App):
 
     async def resume(self, tab: Tab) -> None:
         pane_id = f"s{tab.session_id}"
-        tabs = self.query_one("#tabs", TabbedContent)
-        await tabs.remove_pane(pane_id)
+        await self._remove_pane(pane_id)
         self.tabs.pop(pane_id, None)
         try:
             session = await self.api.session(tab.session_id)
@@ -976,43 +1060,36 @@ class SleipnirApp(App):
         self.run_worker(self.close_active_tab(), exclusive=False)
 
     async def close_active_tab(self) -> None:
-        tabs = self.query_one("#tabs", TabbedContent)
-        pane_id = tabs.active
+        pane_id = self.active_pane
         if not pane_id or pane_id not in self.tabs:
             return
         self.tabs.pop(pane_id, None)
-        await tabs.remove_pane(pane_id)
+        await self._remove_pane(pane_id)
         if pane_id != "new" and pane_id.startswith("s"):
             # Closed tabs stay closed until the space is re-selected: the
             # session is still on the server, so the next poll would
             # otherwise bring it straight back.
             sid = int(pane_id[1:])
             self.closed_sessions.add(sid)
-            space = self.spaces.get(self.current_space)
-            if space:
+            for space in self.spaces.values():
                 space.sessions = [s for s in space.sessions if s["id"] != sid]
+            await self._render_sidebar()
         self._focus_default()
-
-    def set_tab_title(self, pane_id: str, title: str) -> None:
-        try:
-            self.query_one("#tabs", TabbedContent).get_tab(pane_id).label = title
-        except Exception:
-            pass
 
     def action_new_session(self) -> None:
         self.run_worker(self.new_tab(), exclusive=False)
 
     async def new_tab(self) -> None:
-        """An empty tab in this space: the next line typed into it starts a session."""
-        tabs = self.query_one("#tabs", TabbedContent)
+        """An empty pane in this space: the next line typed into it starts a
+        session. It has no tree row yet — there is nothing to name it after
+        until something is said."""
         if "new" not in self.tabs:
             self.tabs["new"] = Tab(session_id=0, agent_id=self.agent_id or 0, key="", loaded=True)
-            log = RichLog(wrap=True, markup=True, highlight=False, id="log-new")
-            await tabs.add_pane(TabPane("new", log, id="new"))
+            await self._add_pane("new")
             space = self.spaces.get(self.current_space)
             where = space.name if space else self.root.name
-            log.write(f"[dim]a new session in {where}; type to start it[/dim]")
-        tabs.active = "new"
+            self.query_one("#log-new", RichLog).write(f"[dim]a new session in {where}; type to start it[/dim]")
+        self._set_active_pane("new")
         self._focus_default()
 
     def action_open_url(self, url: str) -> None:

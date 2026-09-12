@@ -1,13 +1,13 @@
-"""The client against a fake Norns: spaces in the sidebar, a space's
-sessions as tabs, sending, answering a question, forking, new sessions."""
+"""The client against a fake Norns: a tree of spaces and the sessions
+under them, sending, answering a question, forking, new sessions."""
 
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, ListView, RichLog, TabbedContent
+from textual.widgets import Input, RichLog, Tree
 
 from sleipnir.api import ApiError
-from sleipnir.app import SleipnirApp, SpaceItem
+from sleipnir.app import SleipnirApp
 from sleipnir.widgets import PermissionPrompt
 
 
@@ -135,6 +135,36 @@ def log_text(log: RichLog) -> str:
     return "\n".join(strip.text for strip in log.lines)
 
 
+def tree(app) -> Tree:
+    return app.query_one("#sidebar", Tree)
+
+
+def space_names(app) -> list[str]:
+    """The spaces as rows, in order, markup stripped of its tags."""
+    return [str(n.label) for n in tree(app).root.children]
+
+
+def space_node(app, gard_id):
+    for n in tree(app).root.children:
+        if n.data["gard_id"] == gard_id:
+            return n
+    return None
+
+
+def session_ids_under(app, gard_id) -> list[int]:
+    """Which sessions the tree lists under a space; [] if the space is gone."""
+    node = space_node(app, gard_id)
+    return [c.data["session_id"] for c in node.children] if node else []
+
+
+async def show(app, session_id: int) -> str:
+    """Open a session and bring it to the front — what clicking its row does."""
+    key = await app.open_pane_for(app.sessions[session_id])
+    app._set_active_pane(key)
+    await app._ensure_loaded(key)
+    return key
+
+
 def make_app(api=None):
     api = api or FakeApi()
     return SleipnirApp(api, agent_name="sleipnir", gard_id=3, root=Path("/tmp/repo"), stream=FakeStream(), poll_seconds=60), api
@@ -145,16 +175,17 @@ async def test_spaces_tabs_send_reply_and_fork():
     app, api = make_app()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        sidebar = app.query_one("#sidebar", ListView)
-        items = list(sidebar.query(SpaceItem))
         # This checkout's space first, the no-gard bucket last.
-        assert [i.space.name for i in items] == ["laptop", "no gard"]
+        assert [n.data["gard_id"] for n in tree(app).root.children] == [3, 0]
+        assert "laptop" in space_names(app)[0] and "no gard" in space_names(app)[1]
         assert app.current_space == 3 and app.agent_id == 5
 
-        # The tabs are this space's sessions, oldest on the left; the newest is active and loaded.
-        tabs = app.query_one("#tabs", TabbedContent)
-        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
-        assert tabs.active == "s2"
+        # Every space lists its own sessions, oldest first — including the
+        # ones in the space we are not in. That is the point of the tree.
+        assert session_ids_under(app, 3) == [1, 2]
+        assert session_ids_under(app, 0) == [7]
+        # Only the one on screen has a pane; panes are made on demand.
+        assert app.active_pane == "s2"
         assert app.stream.joined == [5]
         assert app.tabs["s2"].question.startswith("Allow bash `rm -rf build`")
         log2 = app.query_one("#log-2", RichLog)
@@ -177,8 +208,8 @@ async def test_spaces_tabs_send_reply_and_fork():
         prompt = app.query_one("#prompt", Input)
         assert prompt.placeholder.startswith("message") and app.focused is prompt
 
-        # Switch tab, type: the message goes to that session on this space's gard.
-        tabs.active = "s1"
+        # Open another session, type: the message goes to that session on this space's gard.
+        await show(app, 1)
         await pilot.pause(0.3)
         assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
         prompt.value = "run the tests"
@@ -194,13 +225,15 @@ async def test_spaces_tabs_send_reply_and_fork():
         text = log_text(app.query_one("#log-1", RichLog))
         assert text.count("Running.") == 1 and "✓ done" in text
 
-        # A status change updates the space row in place. (Norns now shows run 20 as the latest.)
+        # A status change updates the space row in place. The question was
+        # answered above, so nothing is waiting and the row reports work.
+        api.session_list[0]["status"] = "idle"
+        api.session_list[0]["run"] = {"id": 12, "status": "completed", "waiting_for": None}
         api.session_list[1]["status"] = "awaiting_tools"
         api.session_list[1]["run"] = {"id": 20, "status": "running", "waiting_for": None}
         await app.refresh_sessions().wait()
         await pilot.pause()
-        assert list(sidebar.query(SpaceItem))[0] is items[0]
-        assert "1 working" in items[0].markup
+        assert "1 working" in str(space_node(app, 3).label)
 
         # /spaces lists the gards with whether a worker is in them.
         await app.command("/spaces")
@@ -212,10 +245,13 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause()
         assert ("fork", 20, 3, "try again") in api.calls
 
-        # Selecting the other space swaps the tabs.
+        # Opening a session in the other space brings it to the front; the
+        # one we were reading keeps its pane and its transcript.
         await app.select_space(0)
+        await show(app, 7)
         await pilot.pause(0.3)
-        assert [p.id for p in tabs.query("TabPane")] == ["s7"]
+        assert app.active_pane == "s7"
+        assert "s1" in app.tabs
         assert 8 in app.stream.joined
 
         # /delete asks once, then removes the session from Norns and the tabs.
@@ -225,6 +261,7 @@ async def test_spaces_tabs_send_reply_and_fork():
         await pilot.pause(0.3)
         assert ("delete", 8, "run_7") in api.calls
         assert "s7" not in app.tabs and 7 not in app.sessions
+        assert 7 not in session_ids_under(app, 0)
 
 
 @pytest.mark.asyncio
@@ -246,13 +283,12 @@ async def test_new_session_starts_from_the_first_line():
                                     "first_message": "hello there", "run": {"id": 21, "status": "running", "waiting_for": None}})
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
-        tabs = app.query_one("#tabs", TabbedContent)
         assert "new" not in app.tabs and "s3" in app.tabs
-        assert tabs.active == "s3"
+        assert app.active_pane == "s3"
         assert app.tabs["s3"].title == "hello there"
         assert "hello there" in log_text(app.query_one("#log-3", RichLog))
 
-        # A long title is cut for the tab strip, and /close drops the tab.
+        # A long title is cut for the sidebar, and /close drops the pane.
         api.session_list[0]["first_message"] = "x" * 40
         await app.refresh_sessions().wait()
         assert app.tabs["s3"].title.endswith("…") and len(app.tabs["s3"].title) == 22
@@ -293,27 +329,27 @@ async def test_closing_a_tab_keeps_it_closed_across_a_poll():
     app, api = make_app()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        tabs = app.query_one("#tabs", TabbedContent)
-        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+        assert session_ids_under(app, 3) == [1, 2]
 
-        tabs.active = "s1"
+        await show(app, 1)
         await app.close_active_tab()
         await pilot.pause()
-        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert "s1" not in app.tabs
+        assert session_ids_under(app, 3) == [2]
 
-        # Norns still has the session; a poll must not resurrect the tab.
+        # Norns still has the session; a poll must not put the row back.
         await app.refresh_sessions().wait()
         await pilot.pause(0.3)
-        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert session_ids_under(app, 3) == [2]
         assert "s1" not in app.tabs
 
         # Re-selecting the space (its own or, here, round-tripping through
-        # the other one) is what brings a closed tab back.
+        # the other one) is what brings a closed session back.
         await app.select_space(0)
         await pilot.pause(0.3)
         await app.select_space(3)
         await pilot.pause(0.3)
-        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+        assert session_ids_under(app, 3) == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -334,8 +370,7 @@ async def test_a_space_with_no_worker_starts_one_when_you_send(monkeypatch):
         # The checkout of gard 3 is this instance's own root.
         assert app._checkout_of(3) == app.root
 
-        tabs = app.query_one("#tabs", TabbedContent)
-        tabs.active = "s1"
+        await show(app, 1)
         await app.send(app.tabs["s1"], "carry on")
         await pilot.pause()
 
@@ -400,13 +435,12 @@ async def test_an_archived_session_stays_gone_and_comes_back_whole():
     app, api = make_app()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        tabs = app.query_one("#tabs", TabbedContent)
-        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+        assert session_ids_under(app, 3) == [1, 2]
 
-        tabs.active = "s1"
+        await show(app, 1)
         await app.archive_active_session()
         await pilot.pause()
-        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert session_ids_under(app, 3) == [2]
 
         # Unlike /close, this is server-side: a poll cannot resurrect it,
         # and neither can re-selecting the space.
@@ -416,7 +450,7 @@ async def test_an_archived_session_stays_gone_and_comes_back_whole():
         await pilot.pause(0.3)
         await app.select_space(3)
         await pilot.pause(0.3)
-        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert session_ids_under(app, 3) == [2]
 
         # It is in the archive, listed with the id that brings it back.
         await app.show_archive()
@@ -427,7 +461,7 @@ async def test_an_archived_session_stays_gone_and_comes_back_whole():
 
         await app.restore_archived(1)
         await pilot.pause(0.3)
-        assert "s1" in [p.id for p in tabs.query("TabPane")]
+        assert "s1" in app.tabs
         assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
 
 
@@ -439,18 +473,17 @@ async def test_archiving_a_session_with_a_live_run_is_refused():
     api.archive_conflict = True
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        tabs = app.query_one("#tabs", TabbedContent)
-        tabs.active = "s1"
+        await show(app, 1)
 
         await app.archive_active_session()
         await pilot.pause()
-        assert "s1" in [p.id for p in tabs.query("TabPane")]
+        assert "s1" in app.tabs
         assert not any(c[0] == "archive" for c in api.calls if isinstance(c, tuple) and c)
 
         await app.archive_active_session(force=True)
         await pilot.pause()
         assert ("archive", 1, True) in api.calls
-        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+        assert "s1" not in app.tabs
 
 
 @pytest.mark.asyncio
@@ -561,9 +594,9 @@ async def test_another_instance_sees_the_message_it_did_not_send():
     watcher, _ = make_app(api)
     async with watcher.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        tab = watcher.tabs["s1"]
-        watcher.query_one(TabbedContent).active = "s1"
+        await show(watcher, 1)
         await pilot.pause(0.3)
+        tab = watcher.tabs["s1"]
         assert tab.loaded
 
         # Somewhere else, someone sends into the same session.
@@ -587,7 +620,7 @@ async def test_the_instance_that_sent_it_shows_it_once():
     app, _ = make_app(api)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        app.query_one(TabbedContent).active = "s1"
+        await show(app, 1)
         await pilot.pause(0.3)
         prompt = app.query_one("#prompt", Input)
         prompt.value = "one more thing"
@@ -611,7 +644,7 @@ async def test_a_finished_run_reads_the_same_however_it_was_loaded():
     app, _ = make_app(api)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        app.query_one(TabbedContent).active = "s1"      # its run is completed
+        await show(app, 1)      # its run is completed
         await pilot.pause(0.3)
         assert "done" in log_text(app.query_one("#log-1", RichLog))
 
@@ -626,7 +659,7 @@ async def test_a_failed_run_says_why_when_loaded():
     app, _ = make_app(api)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        app.query_one(TabbedContent).active = "s1"
+        await show(app, 1)
         await pilot.pause(0.3)
         assert "the worker went away" in log_text(app.query_one("#log-1", RichLog))
 
@@ -660,7 +693,7 @@ async def test_run_boundaries_come_from_the_stored_turns():
     app, _ = make_app(api)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        app.query_one(TabbedContent).active = "s1"
+        await show(app, 1)
         await pilot.pause(0.3)
         text = log_text(app.query_one("#log-1", RichLog))
         # Two completed runs and the failed one between them.
@@ -686,7 +719,7 @@ async def test_turns_stored_before_runs_were_stamped_still_end():
     app, _ = make_app(api)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        app.query_one(TabbedContent).active = "s1"
+        await show(app, 1)
         await pilot.pause(0.3)
         assert log_text(app.query_one("#log-1", RichLog)).count("done") == 1
 
@@ -718,7 +751,7 @@ async def test_a_run_in_the_transcript_opens_the_dashboard():
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause(0.3)
         app.open_url = lambda url, **kw: opened.append(url)
-        app.query_one(TabbedContent).active = "s1"
+        await show(app, 1)
         await pilot.pause(0.4)
 
         actions = [
@@ -733,3 +766,49 @@ async def test_a_run_in_the_transcript_opens_the_dashboard():
         await app.run_action(actions[0])
         await pilot.pause(0.2)
         assert opened and opened[0].startswith("http://norns.test/runs/")
+
+
+@pytest.mark.asyncio
+async def test_every_space_shows_its_sessions_and_you_can_cross_between_them():
+    """What the tree buys over a tab strip: the whole shape at once. You
+    can see and open a session in a space you are not standing in, and the
+    one you were reading keeps its transcript when you come back."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+
+        # Both spaces list their own sessions without being selected first.
+        assert session_ids_under(app, 3) == [1, 2]
+        assert session_ids_under(app, 0) == [7]
+
+        await show(app, 1)
+        await pilot.pause(0.3)
+        assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
+
+        # Straight to a session in the other space — no select-then-find.
+        node = space_node(app, 0).children[0]
+        await app.on_tree_node_selected(Tree.NodeSelected(node))
+        await pilot.pause(0.3)
+        assert app.active_pane == "s7"
+        assert app.current_space == 0
+
+        # And back: the first session kept its pane and its history.
+        await show(app, 1)
+        await pilot.pause()
+        assert app.active_pane == "s1"
+        assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
+
+
+@pytest.mark.asyncio
+async def test_a_space_row_folds_its_sessions_away():
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        node = space_node(app, 3)
+        assert node.is_expanded  # the space you are in opens on arrival
+
+        await app.on_tree_node_selected(Tree.NodeSelected(node))
+        await pilot.pause()
+        assert not node.is_expanded
+        # Folded away, not gone: the sessions are still there to come back to.
+        assert session_ids_under(app, 3) == [1, 2]

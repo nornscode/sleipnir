@@ -35,6 +35,21 @@ def stored(url: str, root: Path) -> dict | None:
     return _load().get(f"{url.rstrip('/')}|{root}")
 
 
+def root_of(url: str, gard_id: int) -> Path | None:
+    """Where this space lives on this machine, if it lives here at all.
+
+    The store already knows: it is keyed by server and checkout. This is
+    what lets a client start a worker for a space it can see but is not
+    running — and say nothing about one that belongs to another machine.
+    """
+    prefix = f"{url.rstrip('/')}|"
+    for key, value in _load().items():
+        if key.startswith(prefix) and str(value.get("id")) == str(gard_id):
+            root = Path(key[len(prefix):])
+            return root if root.is_dir() else None
+    return None
+
+
 def forget(gard_id: int) -> None:
     """Drop a destroyed gard from the store, whatever checkout it was for,
     so the next `sleip` there creates a new one instead of claiming a

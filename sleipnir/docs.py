@@ -25,6 +25,11 @@ in front of the developer right now. Its layout:
   `sleip`. It then appears in every client's sidebar (ctrl+r to
   refresh one that is already open). `/new` starts a new session in
   the space you are already in, which is a different thing.
+- The worker runs beside the client, not inside it: closing the window
+  leaves the space open and the work running. `sleip stop` stops this
+  checkout's worker, `sleip serve` starts one without a client, and
+  `/start` in the client starts one for any space whose checkout is on
+  this machine — which is what a space that never answers usually needs.
 - Closing a space is `/close-space` or ctrl+g, and it is the opposite of starting
   one: it destroys the gard, so Norns stops that gard's worker wherever
   it runs — this machine or another — and the space disappears from
@@ -55,6 +60,7 @@ Commands the user types in that box (they are the client's, not yours):
     /resume           reload this session and re-attach to its run
     /close            close the tab (ctrl+w); the session lives on
     /delete           delete this session from Norns (asks once)
+    /start            start a worker for this space, if its checkout is here
     /close-space      close this space everywhere (ctrl+g)
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns
@@ -122,8 +128,10 @@ That is the whole surface; there is nothing else to discover.
 
     sleip           the client with this repository's worker (the default)
     sleip run       the same thing, named
-    sleip serve     the worker alone, headless, for a machine nobody sits at
+    sleip serve     start the worker in the background and return; --foreground
+                    holds the terminal instead, which is what a container wants
     sleip chat      the client alone, without a worker
+    sleip stop      stop this checkout's worker
     sleip allow     the allow list, above
     sleip config    settings, below
     sleip setup     ask for the keys and store them for every space

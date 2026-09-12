@@ -13,7 +13,8 @@ from pathlib import Path
 from sleipnir.permissions import Permissions
 from sleipnir.workspace import Workspace
 
-ALLOW_FILE = Path(".sleipnir") / "allow"
+SLEIPNIR_DIR = Path(".sleipnir")
+ALLOW_FILE = SLEIPNIR_DIR / "allow"
 
 _workspace: Workspace | None = None
 _permissions: Permissions | None = None

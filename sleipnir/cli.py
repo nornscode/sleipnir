@@ -22,7 +22,7 @@ from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
 
-SUBCOMMANDS = {"run", "serve", "chat", "allow", "config", "doctor", "docs", "help", "setup"}
+SUBCOMMANDS = {"run", "serve", "chat", "stop", "allow", "config", "doctor", "docs", "help", "setup"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--keep", type=int, help="messages kept verbatim after a compaction")
         p.add_argument("--max-tokens", type=int, help="ceiling on one response; a turn that reaches it is cut off")
         p.add_argument("--no-gard", action="store_true", help="do not pin this worker to a per-repository gard")
+        if name == "serve":
+            p.add_argument(
+                "--foreground", "-f", action="store_true",
+                help="hold this terminal instead of detaching (what a container's supervisor wants)",
+            )
 
     allow = sub.add_parser("allow", help="manage the allow list (.sleipnir/allow)")
     allow_sub = allow.add_subparsers(dest="action", required=True)
@@ -63,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     u = cfg_sub.add_parser("unset")
     u.add_argument("key", choices=config.KEYS)
 
+    sub.add_parser("stop", help="stop this checkout's worker")
     setup = sub.add_parser("setup", help="set the keys sleip needs, kept for every space")
     setup.add_argument("--force", action="store_true", help="ask again for keys that are already set")
     sub.add_parser("doctor", help="check the environment and configuration")
@@ -117,7 +123,15 @@ def main(argv: list[str] | None = None) -> int:
                 "max_tokens": str(args.max_tokens) if args.max_tokens else None,
             },
         )
-        return cmd_start(root, settings, mode=args.command, use_gard=not args.no_gard)
+        return cmd_start(
+            root, settings, mode=args.command, use_gard=not args.no_gard,
+            foreground=getattr(args, "foreground", False),
+        )
+    if args.command == "stop":
+        from sleipnir import daemon
+
+        print(daemon.stop(root))
+        return 0
     if args.command == "setup":
         from sleipnir import setup
 
@@ -141,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool) -> int:
+def cmd_start(
+    root: Path, settings: dict[str, str], *, mode: str, use_gard: bool, foreground: bool = False
+) -> int:
     import asyncio
 
     from sleipnir.api import NornsApi
@@ -175,6 +191,15 @@ def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool
         finally:
             await api.close()
 
+    if mode == "serve" and not foreground:
+        # A checkout being open should not cost a terminal. The child is
+        # this same command with --foreground.
+        from sleipnir import daemon
+
+        pid, message = daemon.start(root, [] if use_gard else ["--no-gard"])
+        print(message)
+        return 0 if pid else 1
+
     if mode == "serve":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         from sleipnir.worker import run_worker
@@ -193,39 +218,21 @@ def cmd_start(root: Path, settings: dict[str, str], *, mode: str, use_gard: bool
     from sleipnir.app import SleipnirApp
 
     gard = asyncio.run(bootstrap()) if mode == "run" else None
-    harness = thread = app = None
     if mode == "run":
-        from sleipnir.worker import build_harness, worker_thread
+        # Start it if it is not already up, and leave it up afterwards: the
+        # worker is this checkout being open, not this window being open.
+        from sleipnir import daemon
 
-        harness, agent = build_harness(root, settings)
-
-        def worker_stopped(error: BaseException | None) -> None:
-            if error is None or app is None:
-                return
-            note = (
-                "this space was closed elsewhere; restart sleip for a new one"
-                if type(error).__name__ == "GardDestroyed"
-                else f"the worker stopped: {error}"
-            )
-            try:
-                app.call_from_thread(app.notify, note, severity="error", timeout=30)
-            except Exception:
-                pass
-
-        thread = worker_thread(harness, agent, gard, worker_stopped)
-
-    def on_exit():
-        if harness is not None:
-            harness.shutdown()
-            thread.join(timeout=10)
+        pid, message = daemon.start(root, [] if use_gard else ["--no-gard"])
+        if pid is None:
+            print(f"error: {message}", file=sys.stderr)
+            return 1
 
     app = SleipnirApp(
         NornsApi(url, api_key),
         agent_name=settings["agent"],
         gard_id=gard["id"] if gard else None,
         root=root,
-        worker=thread,
-        on_exit=on_exit,
     )
     app.run()
     return 0

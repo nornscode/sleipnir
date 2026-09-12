@@ -46,6 +46,7 @@ NO_GARD = 0
 
 HELP = """[b]sleipnir[/b] — spaces on the left (one per checkout with a worker), the sessions of the selected space as tabs.
 Type to talk to the session you are in; when the agent asks a question, your next line answers it.
+The worker runs beside this window, not inside it, so leaving does not stop the work.
 
   /new              start a new session in this space (ctrl+n)
   /fork N [message] fork the current session from step N into a new one
@@ -53,10 +54,12 @@ Type to talk to the session you are in; when the agent asks a question, your nex
   /resume           reload the current session and re-attach to its run
   /close            close the current tab (ctrl+w); the session lives on
   /delete           delete the current session from Norns (asks once)
+  /start            start a worker for this space, if its checkout is here
   /close-space      close this space everywhere (ctrl+g): destroys its
                     gard and stops its worker on every machine
   /help             this text
-  /quit             leave (the worker stops with you; sessions live on in Norns)
+  /quit             stop looking (ctrl+q). The worker keeps this space
+                    open; `sleip stop` closes it in this checkout
 
 Keys: ctrl+n new session · ctrl+w close tab · ctrl+g close space · ctrl+r refresh · ctrl+q quit"""
 
@@ -653,6 +656,8 @@ class SleipnirApp(App):
             await self.close_active_tab()
         elif cmd == "/delete":
             await self.delete_active_session()
+        elif cmd == "/start":
+            self.start_worker_here()
         elif cmd in ("/close-space", "/close_space"):
             self.ask_close_space(force="force" in args)
         elif cmd == "/fork":
@@ -704,6 +709,30 @@ class SleipnirApp(App):
         self.spaces = self._group_spaces(list(self.sessions.values()))
         await self._render_sidebar()
         self.notify(f"deleted “{tab.title}”")
+        self.refresh_sessions()
+
+    def start_worker_here(self) -> None:
+        """Start a worker for the selected space, if its checkout is on this
+        machine. A space whose worker has stopped looks exactly like one
+        that is working — it just never answers."""
+        gid = self.current_space
+        if gid is None or gid == NO_GARD:
+            self.notify("that is not a space with a checkout", severity="warning")
+            return
+
+        from sleipnir import daemon
+        from sleipnir import gard as gard_store
+
+        name = self.gard_names.get(gid, f"gard {gid}")
+        root = gard_store.root_of(self.api.url, gid)
+        if root is None:
+            self.notify(
+                f"“{name}” is not a checkout on this machine; start `sleip` there instead",
+                severity="warning",
+            )
+            return
+        pid, message = daemon.start(root)
+        self.notify(f"{name}: {message}", severity="information" if pid else "error")
         self.refresh_sessions()
 
     def action_close_space(self) -> None:

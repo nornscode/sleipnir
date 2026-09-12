@@ -69,35 +69,30 @@ def title_of(session: dict) -> str:
     return title if len(title) <= 48 else title[:47] + "…"
 
 
-def session_label(session: dict, gard_names: dict[int, str] | None = None) -> str:
-    """One sidebar row, Rich markup."""
-    status = session.get("status") or "stopped"
-    run = session.get("run") or {}
-    if status in ("stopped", "idle") and run.get("status") == "waiting":
-        status = "waiting"
-    glyph, colour = STATUS_GLYPH.get(status, STATUS_GLYPH["unknown"])
-    where = session.get("agent_name") or f"agent {session.get('agent_id')}"
-    gard_id = session.get("gard_id")
-    if gard_id and gard_names and gard_id in gard_names:
-        where = f"{where} @ {gard_names[gard_id]}"
-    return f"[{colour}]{glyph}[/] [b]{escape(title_of(session))}[/b]\n  [dim]{escape(where)} · {STATUS_WORD.get(status, status)}[/dim]"
-
-
 NO_WORKER = ("pending", "disconnected")
 
 
+# A space is a place, a session is a conversation, and at a glance the two
+# should not look alike. Shape carries the kind — squares for spaces,
+# circles for the sessions under them — while fill and colour carry state,
+# so one glyph does both jobs and neither costs a column.
+SPACE_IDLE, SPACE_BUSY = "▢", "▣"
+
+
 def space_row(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
-    """A space as one line of a tree. Same facts as `space_label`, on one
-    row, because a tree node has no second line to put them on."""
+    """A space as one line of a tree: what it is, and what it is doing."""
     if status in NO_WORKER:
-        return f"[red]○[/] [b]{escape(name)}[/b] [red]no worker{' — /start' if here else ''}[/]"
+        # Two situations, not one: the remedy exists only when the checkout
+        # is on this machine, and saying so is what stops a fruitless /start.
+        remedy = "— /start" if here else "· elsewhere"
+        return f"[red]{SPACE_IDLE}[/] [b]{escape(name)}[/b] [red]no worker {remedy}[/]"
     waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
     working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
     if waiting:
-        return f"[yellow]●[/] [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
+        return f"[yellow]{SPACE_BUSY}[/] [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
     if working:
-        return f"[cyan]◐[/] [b]{escape(name)}[/b] [dim]{working} working[/dim]"
-    return f"[dim]○[/] [b]{escape(name)}[/b] [dim]{len(sessions)}[/dim]"
+        return f"[cyan]{SPACE_BUSY}[/] [b]{escape(name)}[/b] [dim]{working} working[/dim]"
+    return f"[dim]{SPACE_IDLE}[/] [b]{escape(name)}[/b] [dim]{len(sessions)}[/dim]"
 
 
 def session_row(session: dict, width: int = 26) -> str:
@@ -112,38 +107,6 @@ def session_row(session: dict, width: int = 26) -> str:
     if len(title) > width:
         title = title[: width - 1] + "…"
     return f"[{colour}]{glyph}[/] {escape(title)}"
-
-
-def space_label(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
-    """One sidebar row for a space: its name and what its sessions are doing.
-
-    A space with no worker says so first and loudly, and stops claiming
-    anything is working — nothing can be. A space that cannot run a thing
-    used to render exactly like one that was fine, which is worse than
-    saying nothing, and it is what sent a message into a dead space.
-    """
-    count = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"
-    if status in NO_WORKER:
-        # The remedy only exists when the checkout is on this machine;
-        # otherwise this window can do nothing about it and should not
-        # pretend it can.
-        remedy = "no worker — /start" if here else "no worker · elsewhere"
-        return f"[red]○[/] [b]{escape(name)}[/b]\n  [dim]{count}[/dim]\n  [red]{remedy}[/]"
-
-    working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
-    waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
-    if waiting:
-        glyph, colour = "●", "yellow"
-    elif working:
-        glyph, colour = "◐", "cyan"
-    else:
-        glyph, colour = "○", "dim"
-    parts = [count]
-    if working:
-        parts.append(f"{working} working")
-    if waiting:
-        parts.append(f"{waiting} need you")
-    return f"[{colour}]{glyph}[/] [b]{escape(name)}[/b]\n  [dim]{' · '.join(parts)}[/dim]"
 
 
 GARD_STATE = {

@@ -3,8 +3,8 @@ from sleipnir.render import (
     archived_lines,
     event_lines,
     message_lines,
-    session_label,
-    space_label,
+    session_row,
+    space_row,
     text_of,
     title_of,
     tool_summary,
@@ -20,13 +20,14 @@ def test_title_and_text():
     assert text_of({"a": 1}) == '{"a": 1}'
 
 
-def test_session_label_status():
+def test_session_row_status():
     s = {"id": 1, "first_message": "hi", "agent_name": "sleipnir", "status": "awaiting_tools", "gard_id": 7, "run": {}}
-    label = session_label(s, {7: "laptop"})
-    assert "◑" in label and "running tools" in label and "sleipnir @ laptop" in label
+    assert "◑" in session_row(s) and "hi" in session_row(s)
     # A parked run shows as needing you even when its process is idle.
     s = {"id": 1, "first_message": "hi", "agent_name": "a", "status": "stopped", "run": {"status": "waiting"}}
-    assert "needs you" in session_label(s)
+    assert "●" in session_row(s)
+    # Long titles are cut to fit a sidebar, not wrapped.
+    assert session_row({"first_message": "x" * 40}).endswith("…")
 
 
 def test_tool_summary():
@@ -61,12 +62,22 @@ def test_message_and_event_lines():
     assert event_lines("unknown", {}) == []
 
 
-def test_space_label():
-    from sleipnir.render import space_label
+def test_a_space_and_a_session_do_not_look_alike():
+    """Shape says what kind of row it is — squares are places, circles are
+    conversations — so an indented session is never mistaken for a space."""
+    busy_space = space_row("laptop", [{"status": "awaiting_llm"}])
+    busy_session = session_row({"first_message": "hi", "status": "awaiting_llm"})
 
-    label = space_label("laptop", [{"status": "awaiting_llm"}, {"status": "idle", "run": {"status": "waiting"}}])
-    assert "●" in label and "laptop" in label and "2 sessions · 1 working · 1 need you" in label
-    assert "○" in space_label("empty", [])
+    assert "▣" in busy_space and "laptop" in busy_space and "1 working" in busy_space
+    assert "◐" in busy_session
+    # No circle in a space row, no square in a session row.
+    assert not any(c in busy_space for c in "○◐◑●◔")
+    assert not any(c in busy_session for c in "▢▣")
+
+    # A space needing attention still reads as a space.
+    waiting = space_row("laptop", [{"status": "idle", "run": {"status": "waiting"}}])
+    assert "▣" in waiting and "1 need you" in waiting
+    assert "▢" in space_row("empty", [])
 
 
 def test_permission_prompt_from_the_workers_request():
@@ -183,11 +194,11 @@ def test_a_space_with_no_worker_says_so_instead_of_looking_busy():
     like a healthy one, and even claimed a session was working."""
     sessions = [{"id": 1, "status": "running", "run": {}}]
 
-    fine = space_label("missive", sessions, "ready")
+    fine = space_row("missive", sessions, "ready")
     assert "working" in fine
     assert "no worker" not in fine
 
-    broken = space_label("missive", sessions, "pending", here=True)
+    broken = space_row("missive", sessions, "pending", here=True)
     assert "no worker" in broken
     # It must stop claiming work is happening — nothing can be.
     assert "working" not in broken
@@ -196,7 +207,7 @@ def test_a_space_with_no_worker_says_so_instead_of_looking_busy():
 
 
 def test_a_space_whose_checkout_is_elsewhere_offers_no_false_remedy():
-    away = space_label("laptop", [], "disconnected", here=False)
+    away = space_row("laptop", [], "disconnected", here=False)
     assert "no worker" in away
     assert "/start" not in away
     assert "elsewhere" in away

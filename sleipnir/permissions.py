@@ -138,12 +138,13 @@ def classify(answer) -> str:
     return "deny"
 
 
-def request_message(token: str, tool: str, subject: str) -> str:
+def request_message(token: str, tool: str, subject: str, note: str = "") -> str:
     example = f"Allow {tool} `{subject}`? (yes / always / no) [{token}]"
     return (
         f"permission required (token {token})\n"
         f"{tool}: {subject}\n\n"
-        "This action is not in the allow list. Do not retry it yet and do not "
+        + (note + " " if note else "")
+        + "This action is not in the allow list. Do not retry it yet and do not "
         "attempt it another way. Ask the user with ask_human, quoting the "
         "token and the exact action, for example:\n"
         f'  "{example}"\n'
@@ -225,6 +226,20 @@ class Permissions:
         token = self.request(tool, subject)
         raise PermissionRequired(request_message(token, tool, subject))
 
+    def _reissue(self, tool: str, subject: str, note: str) -> PermissionRequired:
+        """A token that cannot be used for this action becomes a request for
+        the action actually being attempted.
+
+        Telling the agent only "request permission again" left it with
+        nothing new to quote, so it asked the user about the action it had
+        asked about before and retried with the same dead token — the user
+        answering, twice, into a loop. Handing back a live token for what it
+        is really trying to do makes the next step the obvious one, and the
+        user sees the command that is actually about to run.
+        """
+        token = self.request(tool, subject)
+        return PermissionRequired(request_message(token, tool, subject, note))
+
     def request(self, tool: str, subject: str) -> str:
         token = "p-" + secrets.token_hex(3)
         self.pending[token] = (tool, subject)
@@ -233,13 +248,15 @@ class Permissions:
     def _apply(self, tool: str, subject: str, token: str) -> None:
         issued = self.pending.get(token)
         if issued is None:
-            raise PermissionDenied(f"unknown approval token {token}; request permission again")
+            raise self._reissue(tool, subject, f"Approval token {token} is not one this worker issued.")
         if issued != (tool, subject):
-            raise PermissionDenied(
-                f"approval token {token} was issued for a different action; request permission again"
+            raise self._reissue(
+                tool, subject,
+                f"Approval token {token} was issued for a different action "
+                f"({issued[0]}: {issued[1]}), and an answer covers only the action it was asked about.",
             )
         if token in self.consumed:
-            raise PermissionDenied(f"approval {token} was already used; request permission again")
+            raise self._reissue(tool, subject, f"Approval {token} has already been used once.")
         decision = self.decisions.get(token)
         if decision is None:
             raise PermissionDenied(
@@ -249,8 +266,22 @@ class Permissions:
         self.consumed.add(token)
         if decision == "deny":
             raise PermissionDenied(f"the user declined {tool}: {subject}")
-        if decision == "always" and not always_asks(tool, subject):
-            self.add_rules(rule_for(tool, subject))
+        self._honour_always(token, decision)
+
+    def _honour_always(self, token: str, decision: str) -> None:
+        """Write the rule an "always" earns, as soon as the answer is read.
+
+        It used to be written only when a matching retry arrived, so an
+        agent that asked about one command and then ran another lost the
+        answer entirely: the user chose "always allow" and nothing was
+        allowed. The user answered about an action they were shown; that
+        stands whether or not the agent follows through.
+        """
+        if decision != "always":
+            return
+        issued = self.pending.get(token)
+        if issued and not always_asks(*issued):
+            self.add_rules(rule_for(*issued))
 
     def observe(self, messages: list[dict]) -> None:
         """Learn pending requests and the user's answers from a run's messages.
@@ -289,7 +320,9 @@ class Permissions:
                     continue
                 decision = classify(answer.get("content"))
                 for token in tokens:
-                    self.decisions.setdefault(token, decision)
+                    if token not in self.decisions:
+                        self.decisions[token] = decision
+                        self._honour_always(token, decision)
 
     def _by_subject(self, question) -> list[str]:
         """A question with no token still binds if it quotes the subject

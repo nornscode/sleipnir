@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from sleipnir.permissions import (
@@ -76,8 +78,11 @@ def test_approval_loop_once(tmp_path):
 
     p.observe(_messages(token, "yes"))
     p.check("bash", "rm -rf build", approval=token)  # proceeds
-    with pytest.raises(PermissionDenied, match="already used"):
+    # Using it twice is a fresh request for the same action, not a dead end:
+    # a live token to quote is what the agent needs to make progress.
+    with pytest.raises(PermissionRequired, match="already been used") as again:
         p.check("bash", "rm -rf build", approval=token)
+    assert re.search(r"\(token (p-[0-9a-f]{6})\)", str(again.value)).group(1) != token
     assert p.rules == []
 
 
@@ -111,11 +116,19 @@ def test_token_bound_to_action_and_survives_restart(tmp_path):
     # A fresh worker learns the request and the answer from the messages.
     fresh = Permissions(tmp_path / "allow")
     fresh.observe(_messages(token, "yes"))
-    with pytest.raises(PermissionDenied, match="different action"):
+
+    # An answer covers the action it was asked about and no other. Running
+    # something else with that token asks about *that* — the command the
+    # user is about to be shown is the one that would actually run.
+    with pytest.raises(PermissionRequired) as wrong:
         fresh.check("bash", "rm -rf /", approval=token)
+    assert "rm -rf /" in str(wrong.value) and "different action" in str(wrong.value)
+    reissued = re.search(r"\(token (p-[0-9a-f]{6})\)", str(wrong.value)).group(1)
+    assert fresh.pending[reissued] == ("bash", "rm -rf /")
+
     fresh.check("bash", "rm -rf build", approval=token)
 
-    with pytest.raises(PermissionDenied, match="unknown approval token"):
+    with pytest.raises(PermissionRequired, match="not one this worker issued"):
         Permissions(tmp_path / "allow").check("bash", "rm -rf build", approval="p-000000")
 
 
@@ -148,3 +161,36 @@ def test_subject_binding_needs_a_unique_open_request(tmp_path):
     p.observe(_messages(t1, "yes", question="Allow bash `rm -rf build`?"))
     with pytest.raises(PermissionDenied, match="no answer"):
         p.check("bash", "rm -rf build", approval=t2)
+
+
+def test_an_always_answer_is_honoured_even_if_the_agent_wanders_off(tmp_path):
+    """What made the loop in the screenshot so bad: the agent asked about
+    one command, then ran another, so the rule the user's "always" had
+    earned was never written. They chose "always allow" and nothing was
+    allowed — twice."""
+    p = Permissions(tmp_path / "allow")
+    with pytest.raises(PermissionRequired):
+        p.check("bash", "ls -la")
+    token = next(iter(p.pending))
+
+    p.observe(_messages(token, "always"))
+    # The rule exists on the strength of the answer alone; no retry needed.
+    assert Rule("bash", "ls *") in p.rules
+    p.check("bash", "ls -R")  # allowed, without asking
+
+
+def test_a_stale_token_does_not_trap_the_agent_in_a_loop(tmp_path):
+    """The whole failure, end to end: ask about one command, answer it,
+    then attempt a different one. Two calls, not an unbounded loop."""
+    p = Permissions(tmp_path / "allow")
+    with pytest.raises(PermissionRequired):
+        p.check("bash", "ls -la && find . | sort")
+    first = next(iter(p.pending))
+    p.observe(_messages(first, "yes"))
+
+    with pytest.raises(PermissionRequired) as exc:
+        p.check("bash", "find . -type d | wc -l", approval=first)
+    second = re.search(r"\(token (p-[0-9a-f]{6})\)", str(exc.value)).group(1)
+
+    p.observe(_messages(second, "yes"))
+    p.check("bash", "find . -type d | wc -l", approval=second)  # proceeds

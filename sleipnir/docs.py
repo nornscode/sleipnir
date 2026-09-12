@@ -67,6 +67,10 @@ Commands the user types in that box (they are the client's, not yours):
     /spaces           every space, with whether a worker is in it
     /resume           reload this session and re-attach to its run
     /close            hide this session from the tree (ctrl+w); it comes back
+    /image <path> [text]  the user hands you a picture — a screenshot from
+                      anywhere on their machine. It arrives on their turn and
+                      you can see it; you cannot fetch one yourself, and your
+                      file tools still stop at the repository root
     /rename <name>    name this session; the name is stored on the session,
                       so every client shows it. Empty restores the guess
     /archive          put this session away: the tab goes and stays gone

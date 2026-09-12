@@ -73,8 +73,10 @@ class NornsApi:
         return await self._request("GET", "/agents")
 
     async def send_message(
-        self, agent_id: int, content: str, *, conversation_key: str | None = None, gard_id: int | None = None
+        self, agent_id: int, content: Any, *, conversation_key: str | None = None, gard_id: int | None = None
     ) -> int:
+        """`content` is a string, or the blocks of a turn that carries an
+        image too. Norns routes on the envelope and never reads either."""
         body: dict[str, Any] = {"content": content}
         if conversation_key:
             body["conversation_key"] = conversation_key

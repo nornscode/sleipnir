@@ -215,3 +215,19 @@ def test_a_space_whose_checkout_is_elsewhere_offers_no_false_remedy():
     assert "no worker" in away
     assert "/start" not in away
     assert "elsewhere" in away
+
+
+def test_a_turn_carrying_a_picture_does_not_print_the_picture():
+    """An image reaches the model as a base64 data URL. That must never be
+    what the transcript shows."""
+    content = [
+        {"type": "text", "text": "this list renders wrong with one item"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 5000}, "name": "bug.png"},
+    ]
+    shown = text_of(content)
+    assert "this list renders wrong" in shown
+    assert "🖼 bug.png" in shown
+    assert "base64" not in shown and "AAAA" not in shown
+
+    lines = "\n".join(str(x) for x in message_lines({"role": "user", "content": content}))
+    assert "bug.png" in lines and "base64" not in lines

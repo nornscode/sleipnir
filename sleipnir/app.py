@@ -56,6 +56,8 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
   /close            hide this session from the tree (ctrl+w); it comes back
+  /image <path> [text]  hand the agent a picture — a screenshot from
+                    anywhere on this machine, not just the repository
   /rename <name>    name this session; empty puts the guessed name back
   /archive          put this session away: the tab goes and stays gone,
                     but nothing is deleted
@@ -662,7 +664,9 @@ class SleipnirApp(App):
         for older ones all we have is that it did."""
         if row_run.get("id") == run_id:
             return ended_lines(row_run)
-        return ended_lines({"status": outcomes.get(run_id)})
+        # The id goes with it: without one the line cannot link, so a
+        # transcript read back showed some runs clickable and some not.
+        return ended_lines({"id": run_id, "status": outcomes.get(run_id)})
 
     async def _replay_run(self, tab: Tab, run: dict) -> None:
         try:
@@ -807,7 +811,9 @@ class SleipnirApp(App):
         space = self.current_space
         return space if space and space != NO_GARD else None
 
-    async def send(self, tab: Tab, text: str) -> None:
+    async def send(self, tab: Tab, text) -> None:
+        """`text` is what the user said: a string, or the blocks of a turn
+        that carries a picture as well as words."""
         self._ensure_worker()
         session = self.sessions.get(tab.session_id) or {}
         gard = session.get("gard_id") or None
@@ -818,7 +824,7 @@ class SleipnirApp(App):
             return
         tab.run_id = run_id
         tab.shown_user_run = run_id
-        self.log_lines(tab, ["", f"[b green]›[/] {text}"])
+        self.log_lines(tab, ["", f"[b green]›[/] {escape(text_of(text))}"])
 
     def _agent_for_space(self) -> int | None:
         """The agent a new session in the current space talks to: this
@@ -830,7 +836,7 @@ class SleipnirApp(App):
             return space.sessions[0]["agent_id"]
         return self.agent_id
 
-    async def start_session(self, text: str) -> None:
+    async def start_session(self, text) -> None:
         if self.agent_id is None:
             await self._learn_agent_and_gards()
         self._ensure_worker()
@@ -845,7 +851,7 @@ class SleipnirApp(App):
             self.notify(e.message, severity="error")
             return
         self._pending_key = key
-        self._pending_text = text
+        self._pending_text = text_of(text)
         self.log_line(None, "[dim]starting…[/dim]")
         self.refresh_sessions()
 
@@ -881,6 +887,8 @@ class SleipnirApp(App):
             await self.resume(tab)
         elif cmd == "/close":
             await self.close_active_tab()
+        elif cmd == "/image":
+            await self.send_image(args)
         elif cmd == "/rename":
             await self.rename_active_session(" ".join(args))
         elif cmd == "/archive":
@@ -947,6 +955,32 @@ class SleipnirApp(App):
         self.notify(f"archived “{tab.title}” — /archived to see it")
         self._focus_default()
         self.refresh_sessions()
+
+    async def send_image(self, args: list[str]) -> None:
+        """`/image <path> [something to say about it]` — attach a picture
+        to your next turn. The path is on this machine and need not be in
+        the repository: the user is handing a file over, not the agent
+        reaching outside its workspace."""
+        from sleipnir import images
+
+        if not args:
+            self.notify("which file? /image <path> [what to say about it]", severity="warning")
+            return
+        path = images.expand(args[0])
+        try:
+            content = images.message_with_image(" ".join(args[1:]), path)
+        except images.ImageError as e:
+            self.notify(str(e), severity="error")
+            return
+        except OSError as e:
+            self.notify(f"could not read {path.name}: {e}", severity="error")
+            return
+
+        tab = self.tabs.get(self.active_pane or "")
+        if tab is None or tab.session_id == 0:
+            await self.start_session(content)
+            return
+        await self.send(tab, content)
 
     async def rename_active_session(self, title: str) -> None:
         """Name the session in front of you. The name is stored on the

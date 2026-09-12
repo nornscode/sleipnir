@@ -43,17 +43,38 @@ STATUS_WORD = {
 
 
 def text_of(content: Any) -> str:
-    """Content as text. An opaque block shows as [encrypted] until E3."""
+    """Content as text. An opaque block shows as [encrypted] until E3.
+
+    A message can be a list of blocks — that is how an image reaches the
+    model — and its text is the text blocks. An image is named, not
+    printed: nobody wants a megabyte of base64 in their transcript.
+    """
     if content is None:
         return ""
     if isinstance(content, str):
         return content
     if isinstance(content, dict) and "$enc" in content:
         return "[encrypted]"
+    if isinstance(content, list):
+        parts = [block_text(b) for b in content]
+        return "\n".join(p for p in parts if p)
     try:
         return json.dumps(content)
     except (TypeError, ValueError):
         return str(content)
+
+
+def block_text(block: Any) -> str:
+    """One content block as a line of transcript."""
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return text_of(block)
+    if block.get("type") == "text":
+        return text_of(block.get("text"))
+    if block.get("type") == "image_url":
+        return f"🖼 {block.get('name') or 'image'}"
+    return text_of(block)
 
 
 def title_of(session: dict) -> str:
@@ -236,6 +257,22 @@ def first_line(text: str, width: int = 100) -> str:
     return line if len(line) <= width else line[: width - 1] + "…"
 
 
+def result_summary(content: str, width: int = 100) -> str:
+    """One line describing a result of any size.
+
+    Showing the first line alone made a search over hundreds of files
+    render one arbitrary path as though it were the answer. A count is
+    both shorter and true; a single-line result still reads as itself.
+    """
+    lines = [line for line in content.strip().splitlines() if line.strip()]
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return first_line(lines[0], width)
+    head = first_line(lines[0], max(20, width - 18))
+    return f"{head}  (+{len(lines) - 1} more)"
+
+
 def message_lines(msg: dict, known: dict[str, tuple[str, str]] | None = None) -> list[str]:
     """A stored message as chat lines, Rich markup. `known` maps permission
     tokens to (tool, subject), learned from earlier tool results."""
@@ -279,7 +316,7 @@ def tool_result_lines(name: str, content: str, kind: str | None = None, is_error
         return [f"  [dim]↳ {escape(kind)}[/dim]"]
     marker = "[red]↳[/]" if is_error else "[dim]↳[/dim]"
     label = f"{escape(name)}: " if name else ""
-    return [f"  {marker} [dim]{label}{escape(first_line(content))}[/dim]"]
+    return [f"  {marker} [dim]{label}{escape(result_summary(content))}[/dim]"]
 
 
 RUN_EVENT_NAMES = {"run_completed": "completed", "run_failed": "error"}

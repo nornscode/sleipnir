@@ -10,7 +10,9 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "norns-sdk>=0.6.0",
+    # 0.7.0 honours max_tokens from the task envelope; below it the
+    # ceiling is hard-coded at 4096 and a long turn comes back cut off.
+    "norns-sdk>=0.7.0",
     "textual>=8.0",
 ]
 

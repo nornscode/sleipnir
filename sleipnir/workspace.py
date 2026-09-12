@@ -8,6 +8,7 @@ symlink) is refused.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 # Directories never worth showing a model or searching through.
@@ -54,15 +55,45 @@ class Workspace:
     def skipped(self, p: Path) -> bool:
         return any(part in SKIP_DIRS for part in p.relative_to(self.root).parts)
 
-    def walk_files(self, start: Path):
-        """Yield files under start, depth-first and sorted, skipping SKIP_DIRS."""
+    def git_visible(self) -> set[Path] | None:
+        """The files git would show: tracked, plus untracked and not ignored.
+
+        A hard-coded skip list cannot know that this repository ignores
+        `App/DerivedData` or `.build`, so a search walked hundreds of
+        build artifacts and the model had to work out on its own that
+        `git ls-files` was the real answer. Git already knows; ask it.
+
+        None when this is not a git checkout, or git is not usable here —
+        then the skip list is all we have.
+        """
+        try:
+            out = subprocess.run(
+                ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                cwd=self.root, capture_output=True, timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        return {self.root / name.decode("utf-8", "replace") for name in out.stdout.split(b"\0") if name}
+
+    def walk_files(self, start: Path, respect_gitignore: bool = True):
+        """Yield files under start, depth-first and sorted.
+
+        Ignored files are left out the way they are left out of `git
+        status`; SKIP_DIRS covers whatever is not in a git checkout.
+        """
         if start.is_file():
             yield start
             return
+        visible = self.git_visible() if respect_gitignore else None
         for dirpath, dirnames, filenames in os.walk(start):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for name in sorted(filenames):
-                yield Path(dirpath) / name
+                f = Path(dirpath) / name
+                if visible is not None and f not in visible:
+                    continue
+                yield f
 
 
 def is_binary(p: Path, sniff: int = 8192) -> bool:

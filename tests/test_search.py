@@ -36,3 +36,51 @@ def test_glob(tree):
     assert glob.handler("**/*.py") == "lib/b.py"
     assert glob.handler("*.ex", path="lib") == "lib/a.ex"
     assert glob.handler("*.rs") == "(no matches)"
+
+
+def _git_repo(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def test_search_leaves_out_what_the_repository_ignores(tmp_path, monkeypatch):
+    """A hard-coded skip list cannot know this repo ignores DerivedData, so
+    a search crawled hundreds of build artifacts and the model had to work
+    out for itself that `git ls-files` was the real answer."""
+    root = _git_repo(tmp_path)
+    (root / ".gitignore").write_text("DerivedData/\n*.log\n")
+    (root / "RootView.swift").write_text("struct RootView { // needle\n}\n")
+    (root / "noise.log").write_text("needle\n")
+    (root / "DerivedData").mkdir()
+    (root / "DerivedData" / "Build.swift").write_text("// needle\n")
+
+    from sleipnir import runtime
+    from sleipnir.workspace import Workspace
+
+    monkeypatch.setattr(runtime, "workspace", lambda: Workspace(root))
+
+    found = glob.handler("**/*.swift")
+    assert "RootView.swift" in found
+    assert "DerivedData" not in found
+
+    hits = grep.handler("needle")
+    assert "RootView.swift" in hits
+    assert "DerivedData" not in hits and "noise.log" not in hits
+
+    # An ignored file is still readable when the model asks for it by name:
+    # this filters searching, not access.
+    # Filtering search is not blocking access: read_file still opens it.
+    assert (root / "DerivedData" / "Build.swift").is_file()
+
+
+def test_search_still_works_outside_a_git_checkout(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("needle\n")
+
+    from sleipnir import runtime
+    from sleipnir.workspace import Workspace
+
+    monkeypatch.setattr(runtime, "workspace", lambda: Workspace(tmp_path))
+    assert "a.py" in glob.handler("**/*.py")
+    assert "a.py" in grep.handler("needle")

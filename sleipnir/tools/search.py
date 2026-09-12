@@ -21,7 +21,8 @@ def grep(
 ) -> str:
     """Search file contents with a regular expression. path is a file or
     directory (relative to the workspace root); include filters file
-    names with a glob such as "*.ex". Output is path:line:text."""
+    names with a glob such as "*.ex". Output is path:line:text. Files the
+    repository ignores are left out, as they are from `git status`."""
     ws = runtime.workspace()
     start = ws.resolve(path)
     if not start.exists():
@@ -61,14 +62,18 @@ def grep(
 @tool
 def glob(pattern: str, path: str = ".") -> str:
     """Find files by name pattern, such as "**/*.py" or "lib/**/process*.ex",
-    under a directory relative to the workspace root."""
+    under a directory relative to the workspace root. Files the repository
+    ignores are left out, as they are from `git status`."""
     ws = runtime.workspace()
     start = ws.resolve(path)
     if not start.is_dir():
         raise ToolError(f"{path} is not a directory")
+    visible = ws.git_visible()
     out: list[str] = []
     for p in sorted(start.glob(pattern)):
         if not p.is_file() or ws.skipped(p):
+            continue
+        if visible is not None and p not in visible:
             continue
         out.append(ws.rel(p))
         if len(out) >= MAX_GLOB_RESULTS:

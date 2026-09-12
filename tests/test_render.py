@@ -4,6 +4,7 @@ from sleipnir.render import (
     event_lines,
     message_lines,
     session_label,
+    space_label,
     text_of,
     title_of,
     tool_summary,
@@ -175,3 +176,27 @@ def test_an_empty_archive_says_how_to_fill_it():
     lines = "\n".join(archived_lines([]))
     assert "nothing archived" in lines
     assert "/archive" in lines
+
+
+def test_a_space_with_no_worker_says_so_instead_of_looking_busy():
+    """The bug this fixes: a space nothing could serve rendered exactly
+    like a healthy one, and even claimed a session was working."""
+    sessions = [{"id": 1, "status": "running", "run": {}}]
+
+    fine = space_label("missive", sessions, "ready")
+    assert "working" in fine
+    assert "no worker" not in fine
+
+    broken = space_label("missive", sessions, "pending", here=True)
+    assert "no worker" in broken
+    # It must stop claiming work is happening — nothing can be.
+    assert "working" not in broken
+    # The remedy, where the remedy exists.
+    assert "/start" in broken
+
+
+def test_a_space_whose_checkout_is_elsewhere_offers_no_false_remedy():
+    away = space_label("laptop", [], "disconnected", here=False)
+    assert "no worker" in away
+    assert "/start" not in away
+    assert "elsewhere" in away

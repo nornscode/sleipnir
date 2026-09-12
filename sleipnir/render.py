@@ -83,8 +83,25 @@ def session_label(session: dict, gard_names: dict[int, str] | None = None) -> st
     return f"[{colour}]{glyph}[/] [b]{escape(title_of(session))}[/b]\n  [dim]{escape(where)} · {STATUS_WORD.get(status, status)}[/dim]"
 
 
-def space_label(name: str, sessions: list[dict]) -> str:
-    """One sidebar row for a space: its name and what its sessions are doing."""
+NO_WORKER = ("pending", "disconnected")
+
+
+def space_label(name: str, sessions: list[dict], status: str | None = None, *, here: bool = False) -> str:
+    """One sidebar row for a space: its name and what its sessions are doing.
+
+    A space with no worker says so first and loudly, and stops claiming
+    anything is working — nothing can be. A space that cannot run a thing
+    used to render exactly like one that was fine, which is worse than
+    saying nothing, and it is what sent a message into a dead space.
+    """
+    count = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"
+    if status in NO_WORKER:
+        # The remedy only exists when the checkout is on this machine;
+        # otherwise this window can do nothing about it and should not
+        # pretend it can.
+        remedy = "no worker — /start" if here else "no worker · elsewhere"
+        return f"[red]○[/] [b]{escape(name)}[/b]\n  [dim]{count}[/dim]\n  [red]{remedy}[/]"
+
     working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
     waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
     if waiting:
@@ -93,7 +110,7 @@ def space_label(name: str, sessions: list[dict]) -> str:
         glyph, colour = "◐", "cyan"
     else:
         glyph, colour = "○", "dim"
-    parts = [f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}"]
+    parts = [count]
     if working:
         parts.append(f"{working} working")
     if waiting:

@@ -67,7 +67,9 @@ Commands the user types in that box (they are the client's, not yours):
     /archived         the sessions put away, with their ids
     /restore N        take one back out of the archive and open it
     /delete           delete this session from Norns (asks once)
-    /start            start a worker for this space, if its checkout is here
+    /start            start a worker for this space, if its checkout is here.
+                      Sending into a space with no worker starts one too, so
+                      this is for starting one before there is anything to say
     /close-space      close this space everywhere (ctrl+g)
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns

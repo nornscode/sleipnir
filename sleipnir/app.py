@@ -61,6 +61,7 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /restore N        take one back out of the archive and open it
   /delete           delete the current session from Norns (asks once)
   /start            start a worker for this space, if its checkout is here
+                    (sending into a space with no worker does this too)
   /close-space      close this space everywhere (ctrl+g): destroys its
                     gard and stops its worker on every machine
   /help             this text
@@ -95,17 +96,22 @@ class Space:
     gard_id: int
     name: str
     sessions: list[dict] = field(default_factory=list)
+    # The gard's own status, and whether its checkout is on this machine —
+    # together they are the difference between "start a worker" and "this
+    # window cannot help you".
+    status: str | None = None
+    here: bool = False
 
 
 class SpaceItem(ListItem):
     def __init__(self, space: Space):
         self.space = space
-        self.markup = space_label(space.name, space.sessions)
+        self.markup = space_label(space.name, space.sessions, space.status, here=space.here)
         super().__init__(Label(self.markup, markup=True))
 
     def refresh_space(self, space: Space) -> None:
         self.space = space
-        markup = space_label(space.name, space.sessions)
+        markup = space_label(space.name, space.sessions, space.status, here=space.here)
         if markup != self.markup:
             self.markup = markup
             self.query_one(Label).update(markup)
@@ -171,6 +177,9 @@ class SleipnirApp(App):
         self.spaces: dict[int, Space] = {}
         self.current_space: int | None = gard_id
         self.gard_names: dict[int, str] = {}
+        # gard id -> status ("ready", "pending", "disconnected"). A space
+        # with no worker is the one thing the sidebar most needs to say.
+        self.gard_status: dict[int, str] = {}
         # Gards destroyed since we last looked: no worker can ever
         # claim one again, so neither it nor its sessions are reachable.
         self.closed_gards: set[int] = set()
@@ -210,7 +219,27 @@ class SleipnirApp(App):
         self.stream.start()
         self.set_interval(self.poll_seconds, self.refresh_sessions)
         await self.refresh_sessions().wait()
+        self._warn_if_worker_elsewhere()
         self._focus_default()
+
+    def _warn_if_worker_elsewhere(self) -> None:
+        """This checkout's worker, serving a different Norns than we are.
+
+        A worker reads its environment once, at launch; the client reads it
+        every time it starts. Point NORNS_URL somewhere else and restart the
+        client and the two drift apart in silence — the space looks alive
+        and nothing it is told ever arrives.
+        """
+        from sleipnir import daemon
+
+        theirs = daemon.serving_url(self.root)
+        if theirs and theirs.rstrip("/") != self.api.url.rstrip("/"):
+            self.notify(
+                f"this checkout's worker is serving {theirs}, not {self.api.url} — "
+                "run `sleip stop` here, then /start",
+                severity="error",
+                timeout=30,
+            )
 
     async def on_unmount(self) -> None:
         if self.stream:
@@ -269,17 +298,34 @@ class SleipnirApp(App):
             state.insert(0, f"[yellow]{waiting} need you[/]")
         self.set_status("  ".join(state))
 
+    def _space(self, gid: int) -> Space:
+        """A space row, with the two facts the sidebar needs beyond its name."""
+        name = "no gard" if gid == NO_GARD else self.gard_names.get(gid, f"gard {gid}")
+        # The no-gard bucket is not a checkout and has no worker of its own;
+        # any worker without a gard serves it, so it is never "broken".
+        status = None if gid == NO_GARD else (self.gard_status.get(gid) or None)
+        return Space(gid, name, status=status, here=self._checkout_of(gid) is not None)
+
+    def _checkout_of(self, gid: int) -> Path | None:
+        """Where this space lives on this machine, if it lives here."""
+        if gid == NO_GARD:
+            return None
+        if gid == self.gard_id:
+            return self.root
+        from sleipnir import gard as gard_store
+
+        return gard_store.root_of(self.api.url, gid)
+
     def _group_spaces(self, sessions: list[dict]) -> dict[int, Space]:
         spaces: dict[int, Space] = {}
         if self.gard_id and self.gard_id not in self.closed_gards:
-            spaces[self.gard_id] = Space(self.gard_id, self.gard_names.get(self.gard_id, f"gard {self.gard_id}"))
+            spaces[self.gard_id] = self._space(self.gard_id)
         for s in sessions:
             gid = s.get("gard_id") or NO_GARD
             if gid in self.closed_gards or s["id"] in self.closed_sessions:
                 continue
             if gid not in spaces:
-                name = "no gard" if gid == NO_GARD else self.gard_names.get(gid, f"gard {gid}")
-                spaces[gid] = Space(gid, name)
+                spaces[gid] = self._space(gid)
             spaces[gid].sessions.append(s)
         # This checkout first, then the rest by most recent activity, no-gard last.
         def order(item):
@@ -315,6 +361,7 @@ class SleipnirApp(App):
         except ApiError:
             return  # keep what we know rather than blanking the sidebar
         self.gard_names = {g["id"]: g.get("name") or str(g["id"]) for g in gards}
+        self.gard_status = {g["id"]: g.get("status") or "" for g in gards}
         # Destroy is a soft delete: the row stays with status "destroyed",
         # so a closed space would otherwise sit in every other client.
         self.closed_gards = {g["id"] for g in gards if g.get("status") == "destroyed"}
@@ -336,7 +383,51 @@ class SleipnirApp(App):
         }
         self.spaces = self._group_spaces(list(self.sessions.values()))
         await self._sync_tabs(reset=True)
+        self._warn_if_no_worker(gard_id)
         self._focus_default()
+
+    def _warn_if_no_worker(self, gid: int | None) -> None:
+        """A space nothing is serving. Two different situations wearing the
+        same face: one this window can fix, one it cannot."""
+        if gid is None or gid == NO_GARD:
+            return
+        if (self.gard_status.get(gid) or "") not in ("pending", "disconnected"):
+            return
+        name = self.gard_names.get(gid, f"gard {gid}")
+        if self._checkout_of(gid) is not None:
+            self.notify(f"“{name}” has no worker — /start, or just send and one will start", severity="warning")
+        else:
+            self.notify(f"“{name}” has no worker and its checkout is on another machine", severity="warning")
+
+    def _ensure_worker(self) -> bool:
+        """Start this space's worker if it has none and its checkout is here.
+
+        Called on send: selecting a space is browsing, typing into it is
+        intent. Norns queues a gard's tasks until a worker claims it, so the
+        message that triggered this is served rather than lost.
+        """
+        gid = self.current_space
+        if gid is None or gid == NO_GARD:
+            return True
+        if (self.gard_status.get(gid) or "") not in ("pending", "disconnected"):
+            return True
+        root = self._checkout_of(gid)
+        name = self.gard_names.get(gid, f"gard {gid}")
+        if root is None:
+            self.notify(f"“{name}” has no worker and its checkout is on another machine", severity="error")
+            return False
+
+        from sleipnir import daemon
+
+        pid, message = daemon.start(root, url=self.api.url)
+        if pid:
+            # Optimistic: the gard turns "ready" on the worker's claim, a
+            # poll or two away. Without this the next send starts a second.
+            self.gard_status[gid] = "ready"
+            self.notify(f"{name}: starting a worker — {message}")
+        else:
+            self.notify(f"{name}: {message}", severity="error")
+        return bool(pid)
 
     async def _sync_tabs(self, reset: bool = False) -> None:
         """The tabs are the sessions of the current space, oldest on the left."""
@@ -604,6 +695,7 @@ class SleipnirApp(App):
         return space if space and space != NO_GARD else None
 
     async def send(self, tab: Tab, text: str) -> None:
+        self._ensure_worker()
         session = self.sessions.get(tab.session_id) or {}
         gard = session.get("gard_id") or None
         try:
@@ -628,6 +720,7 @@ class SleipnirApp(App):
     async def start_session(self, text: str) -> None:
         if self.agent_id is None:
             await self._learn_agent_and_gards()
+        self._ensure_worker()
         agent_id = self._agent_for_space()
         if agent_id is None:
             self.notify(f"agent {self.agent_name} is not registered yet; is the worker running?", severity="error")
@@ -817,7 +910,7 @@ class SleipnirApp(App):
                 severity="warning",
             )
             return
-        pid, message = daemon.start(root)
+        pid, message = daemon.start(root, url=self.api.url)
         self.notify(f"{name}: {message}", severity="information" if pid else "error")
         self.refresh_sessions()
 

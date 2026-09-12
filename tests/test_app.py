@@ -317,6 +317,82 @@ async def test_closing_a_tab_keeps_it_closed_across_a_poll():
 
 
 @pytest.mark.asyncio
+async def test_a_space_with_no_worker_starts_one_when_you_send(monkeypatch):
+    """Selecting a space is browsing; typing into it is intent. A message
+    into a space whose checkout is here starts its worker rather than
+    vanishing into a gard nothing serves."""
+    app, api = make_app()
+    api.gard_list[0]["status"] = "disconnected"
+    started: list[tuple] = []
+
+    from sleipnir import daemon
+
+    monkeypatch.setattr(daemon, "start", lambda root, argv_extra=None, url=None: (started.append((root, url)), (4242, "worker running (pid 4242)"))[1])
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        # The checkout of gard 3 is this instance's own root.
+        assert app._checkout_of(3) == app.root
+
+        tabs = app.query_one("#tabs", TabbedContent)
+        tabs.active = "s1"
+        await app.send(app.tabs["s1"], "carry on")
+        await pilot.pause()
+
+        assert started and started[0][0] == app.root
+        # The worker is told which Norns to serve, so it cannot drift from us.
+        assert started[0][1] == api.url
+        # And the message still went: Norns queues a gard's tasks.
+        assert any(c[0] == "send" for c in api.calls if isinstance(c, tuple) and c)
+
+        # A second send does not start a second worker.
+        await app.send(app.tabs["s1"], "and again")
+        await pilot.pause()
+        assert len(started) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_space_on_another_machine_is_not_offered_a_remedy(monkeypatch):
+    app, api = make_app()
+    api.gard_list.append({"id": 9, "name": "faraway", "status": "disconnected"})
+    api.session_list.append({
+        "id": 30, "key": "run_30", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 9,
+        "status": "idle", "first_message": "over there", "run": {"id": 90, "status": "completed", "waiting_for": None},
+    })
+    from sleipnir import daemon
+
+    monkeypatch.setattr(daemon, "start", lambda *a, **k: pytest.fail("must not start a worker for a checkout we do not have"))
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert app._checkout_of(9) is None
+        await app.select_space(9)
+        await pilot.pause(0.3)
+
+        # Sending refuses rather than silently queueing to nobody.
+        assert app._ensure_worker() is False
+
+
+@pytest.mark.asyncio
+async def test_a_worker_serving_a_different_norns_is_called_out(monkeypatch):
+    """The failure that hid for a day: the client moved servers, the
+    detached worker did not, and nothing compared them."""
+    app, api = make_app()
+    warned: list[tuple] = []
+    monkeypatch.setattr(type(app), "notify", lambda self, msg, **kw: warned.append((msg, kw)))
+
+    from sleipnir import daemon
+
+    monkeypatch.setattr(daemon, "serving_url", lambda root: "http://localhost:4000")
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+
+    assert any("4000" in m and api.url in m for m, _ in warned), warned
+    assert any(kw.get("severity") == "error" for _, kw in warned)
+
+
+@pytest.mark.asyncio
 async def test_an_archived_session_stays_gone_and_comes_back_whole():
     """The middle ground between /close and /delete: the tab goes and a
     poll does not bring it back, but nothing is deleted and /restore

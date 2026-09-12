@@ -532,3 +532,19 @@ async def test_turns_stored_before_runs_were_stamped_still_end():
         app.query_one(TabbedContent).active = "s1"
         await pilot.pause(0.3)
         assert log_text(app.query_one("#log-1", RichLog)).count("done") == 1
+
+
+@pytest.mark.asyncio
+async def test_the_window_is_mostly_the_session():
+    """Chrome at the bottom was five rows of a short terminal: a bordered
+    input, a status line and a footer saying much of the same."""
+    from textual.widgets import Footer
+
+    app, _ = make_app()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause(0.3)
+        assert app.query_one("#promptline").size.height == 1
+        assert app.query_one("#statusline").size.height == 1
+        assert not app.query(Footer)
+        chrome = app.query_one("#promptline").size.height + app.query_one("#statusline").size.height
+        assert chrome == 2

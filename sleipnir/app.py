@@ -20,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from rich.markdown import Markdown
 from rich.markup import escape
-from textual.widgets import Footer, Input, Label, ListItem, ListView, OptionList, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import Input, Label, ListItem, ListView, OptionList, RichLog, Static, TabbedContent, TabPane
 
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
@@ -112,13 +112,20 @@ def tab_title(session: dict, width: int = 22) -> str:
 
 class SleipnirApp(App):
     CSS = """
-    #sidebar { width: 30; border-right: solid $primary-background; }
+    #sidebar { width: 28; border-right: solid $primary-background; }
     #sidebar ListItem { padding: 0 1; }
     #main { width: 1fr; }
     #tabs { height: 1fr; }
-    RichLog { height: 1fr; padding: 0 1; }
-    #prompt { margin: 0 1; }
-    #status { height: 1; padding: 0 1; color: $text-muted; }
+    RichLog { height: 1fr; padding: 0 2; }
+
+    /* One row to type on and one to read: the window is for the session,
+       not for its furniture. */
+    #promptline { height: 1; margin: 1 1 0 1; }
+    #caret { width: 2; color: $success; }
+    #prompt { border: none; height: 1; padding: 0; background: transparent; }
+    #statusline { height: 1; padding: 0 2; }
+    #keys, #state { color: $text-muted; height: 1; }
+    #state { width: 1fr; text-align: right; }
     """
 
     BINDINGS = [
@@ -177,12 +184,16 @@ class SleipnirApp(App):
             with Vertical(id="main"):
                 yield TabbedContent(id="tabs")
                 yield PermissionPrompt()
-                yield Input(placeholder="message the agent, or /help", id="prompt")
-                yield Static("", id="status")
-        yield Footer()
+                with Horizontal(id="promptline"):
+                    yield Static("›", id="caret", markup=False)
+                    yield Input(placeholder="message the agent, or /help", id="prompt")
+                with Horizontal(id="statusline"):
+                    yield Static("", id="keys", markup=True)
+                    yield Static("", id="state", markup=True)
 
     async def on_mount(self) -> None:
         self.title = f"sleipnir · {self.root.name}"
+        self.query_one("#keys", Static).update(self.KEYS)
         if self.worker_thread is not None:
             self.worker_thread.start()
         if self.stream is None:
@@ -240,10 +251,14 @@ class SleipnirApp(App):
         waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
         thinking = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
         here = self.gard_names.get(self.gard_id, self.gard_id) if self.gard_id else "no gard"
-        self.set_status(
-            f"{len(self.spaces)} spaces · {len(sessions)} sessions · {thinking} working · {waiting} need you · "
-            f"this checkout: {here} · agent {self.agent_name}"
-        )
+        # The sidebar already counts spaces and their sessions; this says
+        # what it cannot — where you are, and whether anything wants you.
+        state = [f"{here} · {self.agent_name}"]
+        if thinking:
+            state.insert(0, f"{thinking} working")
+        if waiting:
+            state.insert(0, f"[yellow]{waiting} need you[/]")
+        self.set_status("  ".join(state))
 
     def _group_spaces(self, sessions: list[dict]) -> dict[int, Space]:
         spaces: dict[int, Space] = {}
@@ -855,8 +870,10 @@ class SleipnirApp(App):
             if tab is None:
                 self.set_status(line)
 
+    KEYS = "[dim]^n[/] new  [dim]^w[/] close  [dim]^g[/] close space  [dim]^r[/] refresh  [dim]^q[/] quit"
+
     def set_status(self, text: str) -> None:
         try:
-            self.query_one("#status", Static).update(text)
+            self.query_one("#state", Static).update(text)
         except Exception:
             pass

@@ -1,4 +1,13 @@
-from sleipnir.render import Md, event_lines, message_lines, session_label, text_of, title_of, tool_summary
+from sleipnir.render import (
+    Md,
+    archived_lines,
+    event_lines,
+    message_lines,
+    session_label,
+    text_of,
+    title_of,
+    tool_summary,
+)
 
 
 def test_title_and_text():
@@ -149,3 +158,20 @@ def test_a_run_is_something_you_can_click_through_to():
     plain = render.event_lines("completed", {"output": "", "run_id": 42})
     assert str(plain[1]) == "✓ done  run 42"
     assert not [s for s in plain[1].spans if (getattr(s.style, "meta", None) or {}).get("@click")]
+
+
+def test_the_archive_lists_what_you_can_get_back():
+    lines = "\n".join(archived_lines([
+        {"id": 41, "first_message": "try the other approach", "agent_name": "sleipnir", "archived_at": "2026-09-11T18:04:00Z"},
+    ]))
+    assert "41" in lines
+    assert "try the other approach" in lines
+    assert "2026-09-11" in lines
+    # The way back has to be on screen: an id alone is not a way back.
+    assert "/restore" in lines
+
+
+def test_an_empty_archive_says_how_to_fill_it():
+    lines = "\n".join(archived_lines([]))
+    assert "nothing archived" in lines
+    assert "/archive" in lines

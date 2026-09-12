@@ -25,6 +25,7 @@ from textual.widgets import Input, Label, ListItem, ListView, OptionList, RichLo
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
     Md,
+    archived_lines,
     ended_lines,
     event_lines,
     expand_answer,
@@ -53,7 +54,11 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /fork N [message] fork the current session from step N into a new one
   /spaces           every space, with whether a worker is in it
   /resume           reload the current session and re-attach to its run
-  /close            close the current tab (ctrl+w); the session lives on
+  /close            close the current tab (ctrl+w); the session comes back
+  /archive          put this session away: the tab goes and stays gone,
+                    but nothing is deleted
+  /archived         the sessions you have put away
+  /restore N        take one back out of the archive and open it
   /delete           delete the current session from Norns (asks once)
   /start            start a worker for this space, if its checkout is here
   /close-space      close this space everywhere (ctrl+g): destroys its
@@ -673,6 +678,15 @@ class SleipnirApp(App):
             await self.resume(tab)
         elif cmd == "/close":
             await self.close_active_tab()
+        elif cmd == "/archive":
+            await self.archive_active_session(force="force" in args)
+        elif cmd == "/archived":
+            await self.show_archive()
+        elif cmd == "/restore":
+            if not args or not args[0].isdigit():
+                self.notify("which one? /archived lists them with their ids", severity="warning")
+                return
+            await self.restore_archived(int(args[0]))
         elif cmd == "/delete":
             await self.delete_active_session()
         elif cmd == "/start":
@@ -702,6 +716,59 @@ class SleipnirApp(App):
             self.refresh_sessions()
         else:
             self.notify(f"unknown command {cmd}; try /help", severity="warning")
+
+    async def archive_active_session(self, *, force: bool = False) -> None:
+        """Put the current session away. The tab goes, and unlike /close it
+        does not come back on restart — but nothing is deleted, and
+        /archived brings it back."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        pane_id = tabs.active
+        tab = self.tabs.get(pane_id or "")
+        if tab is None or tab.session_id == 0:
+            self.notify("no session to archive", severity="warning")
+            return
+        try:
+            await self.api.archive_session(tab.session_id, force=force)
+        except ApiError as e:
+            if e.status == 409:
+                self.notify(f"{e.message} — /archive force", severity="warning")
+            else:
+                self.notify(e.message, severity="error")
+            return
+        self.sessions.pop(tab.session_id, None)
+        self.tabs.pop(pane_id, None)
+        await tabs.remove_pane(pane_id)
+        self.spaces = self._group_spaces(list(self.sessions.values()))
+        await self._render_sidebar()
+        self.notify(f"archived “{tab.title}” — /archived to see it")
+        self._focus_default()
+        self.refresh_sessions()
+
+    async def show_archive(self) -> None:
+        """`/archived`: the sessions put away, newest first, each with the
+        command that brings it back."""
+        tab = self.tabs.get(self.query_one("#tabs", TabbedContent).active or "")
+        try:
+            archived = await self.api.sessions(archived=True)
+        except ApiError as e:
+            self.notify(e.message, severity="error")
+            return
+        self.log_lines(tab, archived_lines(archived))
+
+    async def restore_archived(self, session_id: int) -> None:
+        """`/restore N`: take a session back out of the archive and open it."""
+        try:
+            session = await self.api.restore_session(session_id)
+        except ApiError as e:
+            self.notify(e.message, severity="error")
+            return
+        self.sessions[session["id"]] = session
+        self.closed_sessions.discard(session["id"])
+        self.spaces = self._group_spaces(list(self.sessions.values()))
+        await self._render_sidebar()
+        await self.open_session(session, replay=True)
+        self.notify(f"restored “{session.get('first_message') or session['id']}”"[:60])
+        self.refresh_sessions()
 
     async def delete_active_session(self) -> None:
         """Two /delete within ten seconds remove the session from Norns."""

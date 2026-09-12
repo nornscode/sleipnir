@@ -61,7 +61,11 @@ Commands the user types in that box (they are the client's, not yours):
     /fork N [message] fork this session from step N into a new one
     /spaces           every space, with whether a worker is in it
     /resume           reload this session and re-attach to its run
-    /close            close the tab (ctrl+w); the session lives on
+    /close            close the tab (ctrl+w); the session comes back
+    /archive          put this session away: the tab goes and stays gone
+                      across restarts, but nothing is deleted
+    /archived         the sessions put away, with their ids
+    /restore N        take one back out of the archive and open it
     /delete           delete this session from Norns (asks once)
     /start            start a worker for this space, if its checkout is here
     /close-space      close this space everywhere (ctrl+g)

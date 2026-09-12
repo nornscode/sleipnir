@@ -19,6 +19,8 @@ class FakeApi:
         self.calls = []
         self.gard_list = [{"id": 3, "name": "laptop", "status": "ready"}]
         self.destroy_conflict = False
+        self.archive_conflict = False
+        self.archived_list: list[dict] = []
         self.run_outcomes = {}
         self.session_list = [
             {"id": 2, "key": "run_2", "agent_id": 5, "agent_name": "sleipnir", "gard_id": 3, "status": "waiting",
@@ -30,8 +32,26 @@ class FakeApi:
              "first_message": "Hello! What can you do?", "run": {"id": 30, "status": "completed", "waiting_for": None}},
         ]
 
-    async def sessions(self, limit=100):
+    async def sessions(self, limit=100, *, archived=False):
+        if archived:
+            return list(self.archived_list)
         return list(self.session_list)
+
+    async def archive_session(self, session_id, *, force=False):
+        if self.archive_conflict and not force:
+            raise ApiError(409, "session has an active run — pass force=true to archive anyway")
+        s = next(s for s in self.session_list if s["id"] == session_id)
+        self.session_list.remove(s)
+        self.archived_list.insert(0, {**s, "archived_at": "2026-09-11T00:00:00Z"})
+        self.calls.append(("archive", session_id, force))
+
+    async def restore_session(self, session_id):
+        s = next(s for s in self.archived_list if s["id"] == session_id)
+        self.archived_list.remove(s)
+        restored = {**s, "archived_at": None}
+        self.session_list.insert(0, restored)
+        self.calls.append(("restore", session_id))
+        return restored
 
     async def session(self, session_id):
         s = next(s for s in self.session_list if s["id"] == session_id)
@@ -294,6 +314,67 @@ async def test_closing_a_tab_keeps_it_closed_across_a_poll():
         await app.select_space(3)
         await pilot.pause(0.3)
         assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+
+
+@pytest.mark.asyncio
+async def test_an_archived_session_stays_gone_and_comes_back_whole():
+    """The middle ground between /close and /delete: the tab goes and a
+    poll does not bring it back, but nothing is deleted and /restore
+    returns it with its transcript."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        tabs = app.query_one("#tabs", TabbedContent)
+        assert [p.id for p in tabs.query("TabPane")] == ["s1", "s2"]
+
+        tabs.active = "s1"
+        await app.archive_active_session()
+        await pilot.pause()
+        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+
+        # Unlike /close, this is server-side: a poll cannot resurrect it,
+        # and neither can re-selecting the space.
+        await app.refresh_sessions().wait()
+        await pilot.pause(0.3)
+        await app.select_space(0)
+        await pilot.pause(0.3)
+        await app.select_space(3)
+        await pilot.pause(0.3)
+        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
+
+        # It is in the archive, listed with the id that brings it back.
+        await app.show_archive()
+        await pilot.pause()
+        listing = log_text(app.query_one("#log-2", RichLog))
+        assert "archived" in listing
+        assert "fix the tests" in listing
+
+        await app.restore_archived(1)
+        await pilot.pause(0.3)
+        assert "s1" in [p.id for p in tabs.query("TabPane")]
+        assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
+
+
+@pytest.mark.asyncio
+async def test_archiving_a_session_with_a_live_run_is_refused():
+    """Archiving stops the process, so a run still going has to be asked
+    for twice — the 409 tells you how."""
+    app, api = make_app()
+    api.archive_conflict = True
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        tabs = app.query_one("#tabs", TabbedContent)
+        tabs.active = "s1"
+
+        await app.archive_active_session()
+        await pilot.pause()
+        assert "s1" in [p.id for p in tabs.query("TabPane")]
+        assert not any(c[0] == "archive" for c in api.calls if isinstance(c, tuple) and c)
+
+        await app.archive_active_session(force=True)
+        await pilot.pause()
+        assert ("archive", 1, True) in api.calls
+        assert [p.id for p in tabs.query("TabPane")] == ["s2"]
 
 
 @pytest.mark.asyncio

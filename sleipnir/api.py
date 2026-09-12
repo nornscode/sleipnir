@@ -45,8 +45,22 @@ class NornsApi:
             return body["data"]
         return body
 
-    async def sessions(self, limit: int = 100) -> list[dict]:
-        return await self._request("GET", "/sessions", params={"limit": limit})
+    async def sessions(self, limit: int = 100, *, archived: bool = False) -> list[dict]:
+        params: dict[str, Any] = {"limit": limit}
+        if archived:
+            params["archived"] = "true"
+        return await self._request("GET", "/sessions", params=params)
+
+    async def archive_session(self, session_id: int, *, force: bool = False) -> None:
+        """Put a session away: out of the list, and it stays out on restart.
+        Nothing is deleted. 409 unless force while its run is going."""
+        path = f"/sessions/{session_id}"
+        if force:
+            path += "?force=true"
+        await self._request("DELETE", path)
+
+    async def restore_session(self, session_id: int) -> dict:
+        return await self._request("POST", f"/sessions/{session_id}/restore")
 
     async def session(self, session_id: int) -> dict:
         return await self._request("GET", f"/sessions/{session_id}")

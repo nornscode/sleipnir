@@ -134,6 +134,19 @@ def spaces_lines(gards: list[dict], sessions: list[dict], here: int | None) -> l
     return lines
 
 
+def archived_lines(sessions: list[dict]) -> list[str]:
+    """`/archived`: what you have put away, and how to get it back."""
+    if not sessions:
+        return ["", "[dim]nothing archived. /archive puts the session you are in away.[/dim]"]
+    lines = ["", f"[b]archived[/b]  [dim]{len(sessions)} session{'s' if len(sessions) != 1 else ''}, newest first[/dim]"]
+    for s in sessions:
+        when = text_of(s.get("archived_at"))[:10]
+        agent = escape(text_of(s.get("agent_name")))
+        lines.append(f"  [dim]{s['id']:>5}[/dim]  {escape(title_of(s))}  [dim]{agent} · {when}[/dim]")
+    lines.append("[dim]  /restore <id> opens one again · nothing here is deleted[/dim]")
+    return lines
+
+
 def tool_summary(name: str, arguments: Any) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     if name == "bash":

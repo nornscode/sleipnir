@@ -150,13 +150,18 @@ def tree(app) -> Tree:
     return app.query_one("#sidebar", Tree)
 
 
+def space_rows(app):
+    """The space nodes, skipping the blank rows that space them apart."""
+    return [n for n in tree(app).root.children if isinstance(n.data, dict)]
+
+
 def space_names(app) -> list[str]:
     """The spaces as rows, in order, markup stripped of its tags."""
-    return [str(n.label) for n in tree(app).root.children]
+    return [str(n.label) for n in space_rows(app)]
 
 
 def space_node(app, gard_id):
-    for n in tree(app).root.children:
+    for n in space_rows(app):
         if n.data["gard_id"] == gard_id:
             return n
     return None
@@ -187,7 +192,7 @@ async def test_spaces_tabs_send_reply_and_fork():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
         # This checkout's space first; no "no gard" bucket at all.
-        assert [n.data["gard_id"] for n in tree(app).root.children] == [3, 9]
+        assert [n.data["gard_id"] for n in space_rows(app)] == [3, 9]
         assert "laptop" in space_names(app)[0] and "desktop" in space_names(app)[1]
         assert app.current_space == 3 and app.agent_id == 5
 
@@ -816,7 +821,7 @@ async def test_a_space_row_folds_its_sessions_away():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
         # Everything starts open: the whole shape at a glance is the point.
-        assert all(n.is_expanded for n in tree(app).root.children)
+        assert all(n.is_expanded for n in space_rows(app))
 
         node = space_node(app, 3)
         await app.on_tree_node_selected(Tree.NodeSelected(node))
@@ -844,8 +849,8 @@ async def test_other_peoples_agents_stay_out_of_a_coding_clients_tree():
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
         assert 50 in {s["id"] for s in api.session_list}  # Norns has it
-        assert 0 not in [n.data["gard_id"] for n in tree(app).root.children]
-        assert 50 not in [c.data["session_id"] for n in tree(app).root.children for c in n.children]
+        assert 0 not in [n.data["gard_id"] for n in space_rows(app)]
+        assert 50 not in [c.data["session_id"] for n in space_rows(app) for c in n.children]
 
 
 @pytest.mark.asyncio
@@ -857,7 +862,7 @@ async def test_a_no_gard_worker_still_sees_what_it_serves():
                       stream=FakeStream(), poll_seconds=60)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)
-        assert 0 in [n.data["gard_id"] for n in tree(app).root.children]
+        assert 0 in [n.data["gard_id"] for n in space_rows(app)]
         assert session_ids_under(app, 0) == [50]
 
 
@@ -887,3 +892,25 @@ async def test_a_session_can_be_named_and_unnamed():
         await pilot.pause(0.3)
         assert ("rename", 1, None) in api.calls
         assert "fix the tests" in str(space_node(app, 3).children[0].label)
+
+
+@pytest.mark.asyncio
+async def test_spaces_are_separated_by_a_blank_row():
+    """A tree has no margins, so the breathing room between one space and
+    the next has to be a row. It must do nothing when selected."""
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        rows = list(tree(app).root.children)
+        spaces = [n for n in rows if isinstance(n.data, dict)]
+        blanks = [n for n in rows if n.data is None]
+
+        assert len(spaces) == 2
+        assert len(blanks) == 1  # between the two, and not after the last
+        assert rows.index(blanks[0]) == rows.index(spaces[0]) + 1
+        assert str(blanks[0].label) == ""
+
+        before = app.active_pane
+        await app.on_tree_node_selected(Tree.NodeSelected(blanks[0]))
+        await pilot.pause()
+        assert app.active_pane == before

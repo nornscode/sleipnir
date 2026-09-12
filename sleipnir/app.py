@@ -401,13 +401,18 @@ class SleipnirApp(App):
         if list(existing) != [sp.gard_id for sp in spaces]:
             root.remove_children()
             existing = {}
-            for sp in spaces:
+            for i, sp in enumerate(spaces):
                 node = root.add(
                     space_row(sp.name, sp.sessions, sp.status, here=sp.here),
                     data={"gard_id": sp.gard_id},
                     expand=sp.gard_id not in self.collapsed_spaces,
                 )
                 existing[sp.gard_id] = node
+                # A tree has no margins, so the gap between one space and
+                # the next is a row of its own. It carries no data, which
+                # is what makes selecting it do nothing.
+                if i < len(spaces) - 1:
+                    root.add_leaf("", data=None)
         else:
             for sp in spaces:
                 existing[sp.gard_id].set_label(space_row(sp.name, sp.sessions, sp.status, here=sp.here))

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from rich.markup import escape
+
+from sleipnir import diff
 from rich.style import Style
 from rich.text import Text
 
@@ -305,15 +307,39 @@ def tool_call_lines(tool_calls: list[dict], known: dict[str, tuple[str, str]] | 
     return lines
 
 
+DIFF_STYLES = (
+    ("+", "green"),
+    ("-", "red"),
+    ("@@", "cyan"),
+)
+
+
+def diff_lines(head: str, body: list[str]) -> list[str]:
+    """A change, shown as the change. Everything else in the transcript is
+    one line per event; this one earns its room, because an edit you
+    cannot see is an edit you are trusting on the agent's word."""
+    lines = [f"  [dim]↳[/dim] [b]{escape(head)}[/b]"]
+    for line in body:
+        colour = next((c for prefix, c in DIFF_STYLES if line.startswith(prefix)), None)
+        text = escape(line)
+        lines.append(f"    [{colour}]{text}[/]" if colour else f"    [dim]{text}[/dim]")
+    return lines
+
+
 def tool_result_lines(name: str, content: str, kind: str | None = None, is_error: bool = False) -> list[str]:
-    """One line per result. Your answer to a question shows as your turn;
-    a permission request shows as the question that follows it."""
+    """One line per result, except a change, which is shown in full. Your
+    answer to a question shows as your turn; a permission request shows as
+    the question that follows it."""
     if name == "ask_human":
         return ["", f"[b green]›[/] {escape(first_line(content))}"]
     if permission_request(content):
         return []
     if kind:
         return [f"  [dim]↳ {escape(kind)}[/dim]"]
+    if not is_error and name in ("edit_file", "write_file"):
+        head, body = diff.split(content)
+        if body:
+            return diff_lines(head, body)
     marker = "[red]↳[/]" if is_error else "[dim]↳[/dim]"
     label = f"{escape(name)}: " if name else ""
     return [f"  {marker} [dim]{label}{escape(result_summary(content))}[/dim]"]

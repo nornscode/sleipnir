@@ -9,7 +9,8 @@ from sleipnir.workspace import ToolError
 
 def test_read_and_write(ws, allow):
     allow("write_file *")
-    assert write_file.handler("a/b.txt", "one\ntwo\nthree\n") == "wrote 14 chars to a/b.txt"
+    # A new file reports its size; there is nothing to diff against.
+    assert write_file.handler("a/b.txt", "one\ntwo\nthree\n") == "a/b.txt  +3 -0  (new file)"
     assert read_file.handler("a/b.txt") == "one\ntwo\nthree"
 
 
@@ -53,7 +54,10 @@ def test_write_requires_permission(ws):
 def test_edit_exact(ws, allow):
     allow("edit_file *")
     (ws / "f.py").write_text("def a():\n    return 1\n")
-    assert edit_file.handler("f.py", "return 1", "return 2") == "edited f.py: 1 replacement"
+    out = edit_file.handler("f.py", "return 1", "return 2")
+    # The result is the change itself: a heading, then a diff.
+    assert out.splitlines()[0] == "f.py  +1 -1"
+    assert "-    return 1" in out and "+    return 2" in out
     assert (ws / "f.py").read_text() == "def a():\n    return 2\n"
 
 
@@ -62,7 +66,8 @@ def test_edit_ambiguous_fails_with_lines(ws, allow):
     (ws / "f.py").write_text("x = 1\ny = 2\nx = 1\n")
     with pytest.raises(ToolError, match=r"matches 2 times \(lines 1, 3\)"):
         edit_file.handler("f.py", "x = 1", "x = 9")
-    assert edit_file.handler("f.py", "x = 1", "x = 9", replace_all=True) == "edited f.py: 2 replacements"
+    out = edit_file.handler("f.py", "x = 1", "x = 9", replace_all=True)
+    assert out.splitlines()[0] == "f.py  +2 -2  (2 replacements)"
     assert (ws / "f.py").read_text() == "x = 9\ny = 2\nx = 9\n"
 
 
@@ -75,7 +80,9 @@ def test_edit_tolerates_indent_shift(ws, allow):
         "if x:   \n    go()\n",
         "if x:\n    go()\n    more()\n",
     )
-    assert out == "edited f.py: 1 replacement"
+    # A pure insertion, and the count says so: one line added, none removed.
+    assert out.splitlines()[0] == "f.py  +1 -0"
+    assert "+            more()" in out
     assert (ws / "f.py").read_text() == (
         "class A:\n    def m(self):\n        if x:\n            go()\n            more()\n        done()\n"
     )

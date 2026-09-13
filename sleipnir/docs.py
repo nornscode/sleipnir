@@ -111,7 +111,9 @@ worker started it.
   permission.
 - edit_file(path, old_string, new_string, replace_all=false, approval=""):
   replace one exact block; whitespace-only indent differences are
-  tolerated; ambiguous matches fail with line numbers.
+  tolerated; ambiguous matches fail with line numbers. The result is the
+  diff of what changed, which the user sees in full — check it landed
+  where you meant rather than assuming.
 - write_file(path, content, approval=""): create or overwrite a file.
 - bash(command, timeout_seconds=120, approval=""): run a command from
   the root; returns the exit code and output, truncated in the middle

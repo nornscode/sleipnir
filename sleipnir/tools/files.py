@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from norns import tool
 
-from sleipnir import runtime
+from sleipnir import diff, runtime
 from sleipnir.tools.edit import apply_edit
 from sleipnir.workspace import ToolError, is_binary
 
@@ -58,9 +58,12 @@ def write_file(path: str, content: str, approval: str = "") -> str:
     runtime.permissions().check("write_file", rel, approval)
     if p.is_dir():
         raise ToolError(f"{path} is a directory")
+    before = p.read_text() if p.is_file() else ""
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
-    return f"wrote {len(content)} chars to {rel}"
+    if not before:
+        return f"{rel}  +{len(content.splitlines())} -0  (new file)"
+    return diff.summary(rel, before, content)
 
 
 @tool(side_effect=True)
@@ -81,4 +84,5 @@ def edit_file(
     text = p.read_text()
     new_text, n = apply_edit(text, old_string, new_string, replace_all)
     p.write_text(new_text)
-    return f"edited {rel}: {n} replacement{'s' if n != 1 else ''}"
+    note = f"{n} replacements" if n != 1 else ""
+    return diff.summary(rel, text, new_text, note)

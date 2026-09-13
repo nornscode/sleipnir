@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     # 0.7.0 honours max_tokens from the task envelope; below it the
     # ceiling is hard-coded at 4096 and a long turn comes back cut off.
-    "norns-sdk>=0.7.0",
+    "norns-sdk>=0.8.0",
     "textual>=8.0",
 ]
 

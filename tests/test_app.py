@@ -4,11 +4,11 @@ under them, sending, answering a question, forking, new sessions."""
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, RichLog, Tree
+from textual.widgets import RichLog, Tree
 
 from sleipnir.api import ApiError
 from sleipnir.app import SleipnirApp
-from sleipnir.widgets import PermissionPrompt
+from sleipnir.widgets import PermissionPrompt, Prompt
 
 
 class FakeApi:
@@ -173,6 +173,11 @@ def session_ids_under(app, gard_id) -> list[int]:
     return [c.data["session_id"] for c in node.children] if node else []
 
 
+async def submit(prompt) -> None:
+    """Press enter in the box, the way a person does."""
+    prompt.post_message(Prompt.Submitted(prompt.text))
+
+
 async def show(app, session_id: int) -> str:
     """Open a session and bring it to the front — what clicking its row does."""
     key = await app.open_pane_for(app.sessions[session_id])
@@ -221,15 +226,15 @@ async def test_spaces_tabs_send_reply_and_fork():
         assert api.calls[-1] == ("reply", 12, "always")
         assert app.tabs["s2"].question is None
         assert not selector.display
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", Prompt)
         assert prompt.placeholder.startswith("message") and app.focused is prompt
 
         # Open another session, type: the message goes to that session on this space's gard.
         await show(app, 1)
         await pilot.pause(0.3)
         assert "fix the tests" in log_text(app.query_one("#log-1", RichLog))
-        prompt.value = "run the tests"
-        await prompt.action_submit()
+        prompt.text = "run the tests"
+        await submit(prompt)
         await pilot.pause()
         assert api.calls[-1] == ("send", 5, "run the tests", "run_1", 3)
         assert app.tabs["s1"].run_id == 20
@@ -287,9 +292,9 @@ async def test_new_session_starts_from_the_first_line():
         await pilot.pause(0.3)
         await app.new_tab()
         await pilot.pause(0.3)
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "hello there"
-        await prompt.action_submit()
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.text = "hello there"
+        await submit(prompt)
         await pilot.pause()
         kind, agent_id, content, key, gard_id = api.calls[-1]
         assert (kind, agent_id, content, gard_id) == ("send", 5, "hello there", 3)
@@ -322,9 +327,9 @@ async def test_the_first_message_is_shown_once():
         await pilot.pause(0.3)
         await app.new_tab()
         await pilot.pause(0.3)
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "hello?"
-        await prompt.action_submit()
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.text = "hello?"
+        await submit(prompt)
         await pilot.pause()
         key = api.calls[-1][3]
         api.session_list.insert(0, {
@@ -638,9 +643,9 @@ async def test_the_instance_that_sent_it_shows_it_once():
         await pilot.pause(0.3)
         await show(app, 1)
         await pilot.pause(0.3)
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "one more thing"
-        await prompt.action_submit()
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.text = "one more thing"
+        await submit(prompt)
         await pilot.pause(0.3)
         # send_message returns run 20; the session row catches up to it.
         api.session_list[1]["run"] = {
@@ -914,3 +919,41 @@ async def test_spaces_are_separated_by_a_blank_row():
         await app.on_tree_node_selected(Tree.NodeSelected(blanks[0]))
         await pilot.pause()
         assert app.active_pane == before
+
+
+@pytest.mark.asyncio
+async def test_the_box_takes_more_than_one_line():
+    """Enter sends; the newline keys add a line. An Input could not hold a
+    newline at all, so a two-line paste arrived as one line."""
+    from textual.events import Key
+
+    app, api = make_app()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause(0.3)
+        await show(app, 1)
+        prompt = app.query_one("#prompt", Prompt)
+        prompt.focus()
+        await pilot.pause()
+
+        # Terminals disagree about shift+enter, so every one of these has
+        # to add a line rather than send.
+        for key in Prompt.NEWLINE_KEYS:
+            prompt.text = ""
+            prompt.insert("first line")
+            await prompt._on_key(Key(key, None))
+            assert prompt.text == "first line\n", key
+
+        prompt.text = ""
+        prompt.insert("first line")
+        await prompt._on_key(Key("shift+enter", None))
+        prompt.insert("second line")
+        assert prompt.text == "first line\nsecond line"
+        # And it grew to hold them, without being asked to.
+        await pilot.pause()
+        assert prompt.styles.height.value == 2
+
+        await submit(prompt)
+        await pilot.pause(0.3)
+        sent = [c for c in api.calls if c[0] == "send"][-1]
+        assert sent[2] == "first line\nsecond line"
+        assert prompt.text == ""

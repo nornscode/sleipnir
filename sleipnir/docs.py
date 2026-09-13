@@ -53,7 +53,9 @@ in front of the developer right now. Its layout:
   its own history and run.
 - The box along the bottom is where the user types. What they write
   there becomes your next message, and when you ask something with
-  ask_human their next line is the answer.
+  ask_human their next line is the answer. Enter sends; shift+enter (or
+  ctrl+j, for terminals that do not report shift+enter) adds a line, so
+  a message can be a paragraph and a paste keeps its shape.
 - The row under it carries the keys on the left and, on the right, what
   the sidebar cannot say: where you are, and whether anything is waiting.
 - Every run in the transcript is a link: "done", a failure, and the line
@@ -91,9 +93,10 @@ Commands the user types in that box (they are the client's, not yours):
     /help             that list
     /quit             leave; the worker stops, sessions live on in Norns
 
-Keys: ctrl+n new session, ctrl+w close, ctrl+g close space,
-ctrl+r refresh, ctrl+q quit. Tab moves focus into the tree, where
-arrows walk it and enter opens a session or folds a space.
+Keys: enter sends, shift+enter or ctrl+j adds a line, ctrl+n new
+session, ctrl+w close, ctrl+g close space, ctrl+r refresh, ctrl+q quit.
+Tab moves focus into the tree, where arrows walk it and enter opens a
+session or folds a space.
 
 Because the loop is in Norns and not in this process, the session
 outlives the client: closing it, the terminal, or the worker leaves the

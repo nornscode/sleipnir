@@ -1,5 +1,4 @@
-"""The permission selector: what appears when the agent wants to run
-something the allow list does not cover."""
+"""The permission selector, and the box you type into."""
 
 from __future__ import annotations
 
@@ -8,7 +7,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
+from textual.widgets import OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 CHOICES = [("yes", "Allow once"), ("always", "Always allow  (adds a rule to .sleipnir/allow)"), ("no", "Deny")]
@@ -128,3 +127,54 @@ class ConfirmClose(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class Prompt(TextArea):
+    """The box you type into: one line until you want more than one.
+
+    An Input cannot hold a newline at all, so a paste of two lines arrived
+    as one and there was no way to write a paragraph. A TextArea can, but
+    its enter inserts a newline, and enter is how you send — so the two
+    swap places here.
+
+    Which key adds the newline is not one key, because terminals disagree.
+    shift+enter is what people reach for and what a terminal speaking the
+    kitty keyboard protocol reports; the others are for terminals that
+    send plain enter for it. ctrl+j always works: it *is* a line feed.
+    """
+
+    NEWLINE_KEYS = ("shift+enter", "ctrl+j", "alt+enter", "escape+enter")
+    MAX_LINES = 12
+
+    class Submitted(Message):
+        def __init__(self, value: str) -> None:
+            self.value = value
+            super().__init__()
+
+    def __init__(self, **kwargs):
+        super().__init__(soft_wrap=True, tab_behavior="focus", show_line_numbers=False, **kwargs)
+
+    async def _on_key(self, event) -> None:
+        if event.key in self.NEWLINE_KEYS:
+            event.stop()
+            event.prevent_default()
+            self.insert("\n")
+            return
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self.text))
+            return
+        await super()._on_key(event)
+
+    def clear_text(self) -> None:
+        self.text = ""
+        self.fit()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.fit()
+
+    def fit(self) -> None:
+        """Grow with what is typed, up to a point: a long paste should not
+        take the transcript's room away."""
+        self.styles.height = max(1, min(self.document.line_count, self.MAX_LINES))

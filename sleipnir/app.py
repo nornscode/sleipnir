@@ -20,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from rich.markdown import Markdown
 from rich.markup import escape
-from textual.widgets import ContentSwitcher, Input, OptionList, RichLog, Static, Tree
+from textual.widgets import ContentSwitcher, OptionList, RichLog, Static, Tree
 
 from sleipnir.api import ApiError, NornsApi
 from sleipnir.render import (
@@ -41,7 +41,7 @@ from sleipnir.render import (
     title_of,
 )
 from sleipnir.stream import AgentStream
-from sleipnir.widgets import ConfirmClose, PermissionPrompt
+from sleipnir.widgets import ConfirmClose, PermissionPrompt, Prompt
 
 logger = logging.getLogger("sleipnir.app")
 
@@ -75,7 +75,7 @@ The worker runs beside this window, not inside it, so leaving does not stop the 
   /quit             stop looking (ctrl+q). The worker keeps this space
                     open; `sleip stop` closes it in this checkout
 
-Keys: ctrl+n new session · ctrl+w close · ctrl+g close space · ctrl+r refresh · ctrl+q quit · tab moves focus to the tree, then arrows and enter"""
+Keys: enter sends · shift+enter (or ctrl+j) adds a line · ctrl+n new session · ctrl+w close · ctrl+g close space · ctrl+r refresh · ctrl+q quit · tab moves focus to the tree"""
 
 
 @dataclass
@@ -127,8 +127,8 @@ class SleipnirApp(App):
     /* No boxes, and a blank row on either side of the prompt: what made
        the old chrome feel tight was five rows of it, not the spacing. The
        caret lines up with the transcript's own left edge. */
-    #promptline { height: 1; margin: 1 2 0 2; }
-    #caret { width: 2; color: $success; }
+    #promptline { height: auto; margin: 1 2 0 2; }
+    #caret { width: 2; height: 1; color: $success; }
     #prompt { border: none; height: 1; padding: 0; background: transparent; }
     #prompt:focus { border: none; background: transparent; }
     #statusline { height: 1; margin: 1 0 0 0; padding: 0 2; }
@@ -205,7 +205,7 @@ class SleipnirApp(App):
                 yield PermissionPrompt()
                 with Horizontal(id="promptline"):
                     yield Static("›", id="caret", markup=False)
-                    yield Input(placeholder="message the agent, or /help", id="prompt")
+                    yield Prompt(id="prompt")
                 with Horizontal(id="statusline"):
                     yield Static("", id="keys", markup=True)
                     yield Static("", id="state", markup=True)
@@ -725,7 +725,7 @@ class SleipnirApp(App):
         """The permission selector shows for a pending permission on the
         active tab; the input's placeholder says what a line will do."""
         tab = self.active_tab()
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", Prompt)
         selector = self.query_one(PermissionPrompt)
         action = permission_in_question(tab.question, tab.permissions) if tab and tab.question else None
         if action:
@@ -746,7 +746,7 @@ class SleipnirApp(App):
         if selector.display:
             selector.query_one(OptionList).focus()
         else:
-            self.query_one("#prompt", Input).focus()
+            self.query_one("#prompt", Prompt).focus()
 
     async def on_permission_prompt_answered(self, event: PermissionPrompt.Answered) -> None:
         tab = self.active_tab()
@@ -759,7 +759,7 @@ class SleipnirApp(App):
             return
         tab.question = None
         self._update_prompt()
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt", Prompt).focus()
 
     def on_permission_prompt_type_reply(self, event: PermissionPrompt.TypeReply) -> None:
         self._focus_default()
@@ -792,9 +792,9 @@ class SleipnirApp(App):
 
     # -- input -------------------------------------------------------------
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_prompt_submitted(self, event: Prompt.Submitted) -> None:
         text = event.value.strip()
-        event.input.value = ""
+        self.query_one("#prompt", Prompt).clear_text()
         if not text:
             return
         if text.startswith("/"):

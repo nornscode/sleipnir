@@ -168,6 +168,11 @@ That is the whole surface; there is nothing else to discover.
                     holds the terminal instead, which is what a container wants
     sleip chat      the client alone, without a worker
     sleip stop      stop this checkout's worker
+    sleip workers   every worker on this machine, with whether Norns has it
+                    and whether it runs older code; `sleip workers stop` or
+                    `restart` with a pid, checkout name or path, --all or
+                    --stale. Stopping workers always asks: the worker you
+                    are running in is one of them
     sleip allow     the allow list, above
     sleip config    settings, below
     sleip setup     ask for the keys and store them for every space

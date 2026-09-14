@@ -109,6 +109,12 @@ def always_asks(tool: str, subject: str) -> bool:
             words = seg.split()
             if len(words) >= 2 and words[0] in COMMAND_NAMES and words[1] in SELF_CONFIG_SUBCOMMANDS:
                 return True
+            # Stopping workers from inside one can stop the worker running
+            # the command, halfway through the call that asked for it.
+            if len(words) >= 2 and words[0] in COMMAND_NAMES and (
+                words[1] == "stop" or (words[1] == "workers" and len(words) >= 3 and words[2] in ("stop", "restart"))
+            ):
+                return True
         return False
     return subject == HARNESS_DIR or subject.startswith(HARNESS_DIR + "/")
 

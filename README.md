@@ -81,6 +81,32 @@ The pieces run alone too: `sleip serve` is the worker without a
 client, for a machine you are not sitting at, and `sleip chat` is
 the client without a worker.
 
+Workers outlive the window, so a machine collects them — one per
+checkout you have opened. `sleip workers` lists every one on this
+machine, whichever way it was started:
+
+```
+3 workers on this machine
+  PID    CHECKOUT               NORNS                  UP      STATE
+  50861  ~/projects/missive     http://localhost:4001  2d 3h   connected · older code
+  83465  ~/projects/org-mobile  http://localhost:4001  5m      connected
+  17689  ~/projects/norns       http://localhost:4001  1h 12m  not connected · older code
+```
+
+"older code" means it started before Sleipnir or the SDK last changed.
+Stop or restart them by pid, checkout name, or path, or all at once:
+
+```bash
+sleip workers restart --stale     # everything running older code
+sleip workers stop missive
+sleip workers restart --all
+```
+
+A restart starts the same worker in its own checkout, with the flags it
+was started with and that checkout's environment, and waits for one that
+is still draining rather than starting a second beside it. `sleip stop`
+still stops this checkout's worker.
+
 Options: `--root` (repository root, default the current directory),
 `--agent` (default `sleipnir`, the agent's name in Norns), `--model` (default `claude-sonnet-5`),
 `--max-steps` (default 200), `--compact-at` (default 100000),

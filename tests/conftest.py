@@ -16,6 +16,7 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setattr("sleipnir.env.USER_ENV", home / "env")
     monkeypatch.setattr("sleipnir.setup.USER_ENV", home / "env")
     monkeypatch.setattr("sleipnir.gard.STORE", home / "gards.json")
+    monkeypatch.setattr("sleipnir.workers.REGISTRY", home / "workers")
     return home
 
 

@@ -5,6 +5,7 @@
     sleip chat ...                                                         client only
     sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
     sleip config show | set <key> <value> | unset <key>
+    sleip workers [stop|restart <pid|name|path>... | --all | --stale]
     sleip doctor
     sleip docs
 """
@@ -22,7 +23,7 @@ from sleipnir.docs import DOCS
 from sleipnir.permissions import MUTATING, Permissions, Rule
 from sleipnir.runtime import ALLOW_FILE
 
-SUBCOMMANDS = {"run", "serve", "chat", "stop", "allow", "config", "doctor", "docs", "help", "setup"}
+SUBCOMMANDS = {"run", "serve", "chat", "stop", "workers", "allow", "config", "doctor", "docs", "help", "setup"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,6 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("key", choices=config.KEYS)
 
     sub.add_parser("stop", help="stop this checkout's worker")
+    wk = sub.add_parser("workers", help="every worker on this machine: list them, stop or restart them")
+    wk_sub = wk.add_subparsers(dest="action")
+    wk_sub.add_parser("list")
+    for name in ("stop", "restart"):
+        w = wk_sub.add_parser(name)
+        w.add_argument("targets", nargs="*", help="a pid, a checkout's name, or its path")
+        w.add_argument("--all", action="store_true", help="every worker on this machine")
+        w.add_argument("--stale", action="store_true", help="only workers running older code")
     setup = sub.add_parser("setup", help="set the keys sleip needs, kept for every space")
     setup.add_argument("--force", action="store_true", help="ask again for keys that are already set")
     sub.add_parser("doctor", help="check the environment and configuration")
@@ -125,13 +134,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return cmd_start(
             root, settings, mode=args.command, use_gard=not args.no_gard,
-            foreground=getattr(args, "foreground", False),
+            foreground=getattr(args, "foreground", False), flags=serve_flags(args),
         )
     if args.command == "stop":
         from sleipnir import daemon
 
         print(daemon.stop(root))
         return 0
+    if args.command == "workers":
+        return cmd_workers(args, loaded_env)
     if args.command == "setup":
         from sleipnir import setup
 
@@ -155,8 +166,22 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def serve_flags(args) -> list[str]:
+    """The flags a worker is started with, so the detached worker — and a
+    restart of it — is the worker that was asked for."""
+    flags: list[str] = []
+    for name in ("agent", "model", "max_steps", "compact_at", "keep", "max_tokens"):
+        value = getattr(args, name, None)
+        if value:
+            flags += [f"--{name.replace('_', '-')}", str(value)]
+    if getattr(args, "no_gard", False):
+        flags.append("--no-gard")
+    return flags
+
+
 def cmd_start(
-    root: Path, settings: dict[str, str], *, mode: str, use_gard: bool, foreground: bool = False
+    root: Path, settings: dict[str, str], *, mode: str, use_gard: bool, foreground: bool = False,
+    flags: list[str] | None = None,
 ) -> int:
     import asyncio
 
@@ -196,7 +221,7 @@ def cmd_start(
         # this same command with --foreground.
         from sleipnir import daemon
 
-        pid, message = daemon.start(root, [] if use_gard else ["--no-gard"])
+        pid, message = daemon.start(root, flags if flags is not None else ([] if use_gard else ["--no-gard"]))
         print(message)
         return 0 if pid else 1
 
@@ -204,10 +229,23 @@ def cmd_start(
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         from sleipnir.worker import run_worker
 
+        import time
+
+        from sleipnir import workers
+
         gard = asyncio.run(bootstrap())
         if gard:
             logging.getLogger("sleipnir").info(f"gard {gard['id']} ({gard['source']})")
-        run_worker(root, settings, gard)
+        # On the machine's list of workers for as long as this one serves.
+        worker_id = workers.new_worker_id(root)
+        workers.register(workers.Worker(
+            pid=os.getpid(), root=root, url=url, worker_id=worker_id,
+            gard_id=gard["id"] if gard else None, started=time.time(), flags=flags or [],
+        ))
+        try:
+            run_worker(root, settings, gard, worker_id=worker_id)
+        finally:
+            workers.unregister(os.getpid())
         return 0
 
     # The client owns the terminal; the worker's logs go to a file.
@@ -223,7 +261,7 @@ def cmd_start(
         # worker is this checkout being open, not this window being open.
         from sleipnir import daemon
 
-        pid, message = daemon.start(root, [] if use_gard else ["--no-gard"])
+        pid, message = daemon.start(root, flags if flags is not None else ([] if use_gard else ["--no-gard"]))
         if pid is None:
             print(f"error: {message}", file=sys.stderr)
             return 1
@@ -236,6 +274,57 @@ def cmd_start(
     )
     app.run()
     return 0
+
+
+def cmd_workers(args, loaded_env: dict[str, str]) -> int:
+    import time
+
+    from sleipnir import workers
+
+    found = workers.listed()
+    action = args.action or "list"
+    if action == "list":
+        url = os.environ.get("NORNS_URL", "").strip()
+        key = os.environ.get("NORNS_API_KEY", "").strip()
+        view = workers.norns_view(url, key) if url and key else None
+        for line in workers.table_lines(
+            found, now=time.time(), changed_at=workers.code_changed_at(), norns=view, norns_url=url or None
+        ):
+            print(line)
+        return 0
+
+    if not (args.targets or args.all or args.stale):
+        print(
+            f"error: name the workers to {action} — a pid, a checkout's name, or its path — "
+            "or pass --all or --stale. `sleip workers` lists them.",
+            file=sys.stderr,
+        )
+        return 1
+    chosen, unmatched = workers.select(found, args.targets) if args.targets and not args.all else (list(found), [])
+    if args.stale:
+        changed = workers.code_changed_at()
+        chosen = [w for w in chosen if w.started < changed]
+    for target in unmatched:
+        print(f"no worker matches {target!r}", file=sys.stderr)
+    if not chosen:
+        print(f"nothing to {action}")
+        return 1 if unmatched else 0
+
+    # A restarted worker loads its own checkout's environment, and files
+    # never override what the process already has — so what this command
+    # loaded for the checkout it was run in must not go with it.
+    env = {k: v for k, v in os.environ.items() if k not in loaded_env}
+    ok = not unmatched
+    for w in chosen:
+        if action == "stop":
+            stopped, message = workers.stop(w)
+            print(f"{workers.display_root(w.root)}: {message}")
+            ok = ok and stopped
+        else:
+            message = workers.restart(w, env)
+            print(message)
+            ok = ok and ": restarted" in message
+    return 0 if ok else 1
 
 
 def cmd_allow(root: Path, args) -> int:

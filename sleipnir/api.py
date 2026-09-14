@@ -103,6 +103,10 @@ class NornsApi:
     async def delete_session(self, agent_id: int, key: str) -> None:
         await self._request("DELETE", f"/agents/{agent_id}/conversations/{key}")
 
+    async def workers(self) -> list[dict]:
+        """The workers connected to Norns right now, from any machine."""
+        return await self._request("GET", "/workers")
+
     async def gards(self) -> list[dict]:
         return await self._request("GET", "/gards")
 

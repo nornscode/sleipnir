@@ -100,10 +100,10 @@ def build_harness(root: Path, settings: dict[str, str]) -> tuple[Harness, list[A
     return harness, agents
 
 
-def run_worker(root: Path, settings: dict[str, str], gard: dict | None = None) -> None:
+def run_worker(root: Path, settings: dict[str, str], gard: dict | None = None, worker_id: str | None = None) -> None:
     """Serve until told to stop, in this thread."""
     harness, agents = build_harness(root, settings)
-    harness.run(agents, **gard_kwargs(gard))
+    harness.run(agents, worker_id=worker_id, **gard_kwargs(gard))
 
 
 def worker_thread(

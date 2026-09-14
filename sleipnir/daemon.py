@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -36,7 +37,18 @@ def alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # someone else's, but running
-    return True
+    return not zombie(pid)
+
+
+def zombie(pid: int) -> bool:
+    """Exited, but not yet collected by whatever started it. A worker the
+    client started, then stopped, stays like this for as long as the client
+    runs: it answers signals, and it is gone in every way that matters."""
+    try:
+        stat = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return stat.strip().startswith("Z")
 
 
 def _read_pid_file(root: Path) -> tuple[int, str | None] | None:
@@ -107,6 +119,9 @@ def start(
         )
     finally:
         handle.close()
+    # Collect it when it exits. A client that started a worker outlives it,
+    # and an uncollected child lingers as a zombie that still looks alive.
+    threading.Thread(target=child.wait, name=f"reap-{child.pid}", daemon=True).start()
 
     # A worker that cannot connect dies in the first second; say so now
     # rather than leaving a pid file pointing at nothing.

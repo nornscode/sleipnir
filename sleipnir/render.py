@@ -490,8 +490,10 @@ def helper_event_lines(label: str, event: str, payload: dict, known: dict[str, t
         calls = [tc for tc in payload.get("tool_calls") or [] if tc.get("name") != "ask_human"]
         return [f"  {who} {line}" for line in tool_call_lines(calls)]
     if event == "tool_result":
+        # Marked like its call: a change shown in full is otherwise nobody's.
         lines = tool_result_lines(payload.get("name", ""), text_of(payload.get("content")), None, bool(payload.get("is_error")))
-        return [f"  {line}" if line else line for line in lines]
+        marked = next((i for i, line in enumerate(lines) if line), None)
+        return [f"  {who} {line.lstrip()}" if i == marked else (f"  {line}" if line else line) for i, line in enumerate(lines)]
     if event == "waiting_for_user":
         return ["", f"{who} [yellow]asks you[/yellow]"] + question_lines(text_of(payload.get("question")), known)[1:]
     if event == "completed":

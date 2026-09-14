@@ -130,3 +130,12 @@ def test_helper_names_and_launches_read_as_the_team():
     [line] = tool_result_lines("launch_agent", "Auth is checked in lib/auth.ex:40.", "subagent_completed")
     assert "lib/auth.ex:40" in line
     assert "subagent_busy" in tool_result_lines("launch_agent", "", "subagent_busy")[0]
+
+
+def test_a_helpers_change_says_whose_it_is():
+    from sleipnir.render import helper_event_lines
+
+    diff = "README.md  +1 -0\n@@ -1,1 +1,2 @@\n # Sleipnir\n+a line"
+    lines = helper_event_lines("code", "tool_result", {"name": "edit_file", "content": diff})
+    assert lines[0].startswith("  [magenta]code[/magenta] ") and "README.md" in lines[0]
+    assert all("[magenta]code" not in line for line in lines[1:])

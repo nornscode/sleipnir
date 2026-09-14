@@ -2,7 +2,8 @@
 
 A coding harness worker for [Norns](https://github.com/nornscode/norns).
 It runs on your machine, in your repository, and gives a Norns agent six
-tools: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`.
+tools: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, and
+`git` for reading history.
 The agent loop itself runs in Norns, so a session survives the laptop
 sleeping, the terminal closing, or the worker restarting, and every step
 is in the run log where it can be resumed, inspected, or forked. The
@@ -160,6 +161,42 @@ model, so the model cannot approve on your behalf. `.sleipnir/` is
 per-repository; add it to `.gitignore` or commit it to share a team's
 rules.
 
+## The team
+
+The agent does not have to work alone. The worker also serves two
+helpers, and the agent decides per task whether to do the work itself or
+hand it out:
+
+- **`sleipnir-explore`** reads: `read_file`, `grep`, `glob`, `git`.
+  Nothing it is offered can change the repository. The agent sends
+  explorers the questions whose answers mean reading a lot, several at
+  once when they are independent, and gets back the conclusion rather
+  than every file.
+- **`sleipnir-code`** is the one helper that changes things. There is one
+  per session: Norns reuses its conversation, so it remembers what it was
+  asked before, and a second assignment while it is still working is
+  refused rather than starting a second writer.
+
+What each can do is set by the worker and enforced by Norns, which offers
+an agent only its own tools and refuses a call to any other; only the
+agent can launch the helpers. The agent chooses who does the work, never
+what they may do. Helpers' changes go through the same allow list, and
+when one needs permission it asks you directly — the question appears in
+the session that launched it, marked with the helper's name, and your
+answer goes to the helper's run. Their conversations are not listed as
+sessions of their own.
+
+```bash
+sleip config set explore_model claude-haiku-4-5   # empty: the agent's own model
+sleip config set code_model claude-opus-5
+sleip config set team off                          # the agent works alone
+```
+
+`git` refuses subcommands that write, arguments that write a file or read
+one outside the repository, and the diff drivers, pagers and signature
+checks a repository's config could make it run, so it never asks for
+permission. It still runs git with this repository's config, as you do.
+
 ## Configuring it, from inside it
 
 `sleip` is also the configuration tool, and the agent can run it
@@ -168,7 +205,7 @@ through `bash`:
 ```bash
 sleip setup       # the keys, stored for every space (--force to re-ask)
 sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
-sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep
+sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep, team, explore_model, code_model
 sleip doctor      # connection, keys, gard, allow list
 sleip docs        # the reference the agent reads
 sleip help        # the commands, in brief

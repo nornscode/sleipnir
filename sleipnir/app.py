@@ -29,6 +29,10 @@ from sleipnir.render import (
     ended_lines,
     event_lines,
     expand_answer,
+    helper_event_lines,
+    helper_label,
+    HELPER_ROLES,
+    is_helper_session,
     message_lines,
     permission_details,
     permission_in_question,
@@ -91,6 +95,9 @@ class Tab:
     # printed once by every instance that did not.
     shown_user_run: int | None = None
     question: str | None = None
+    # Whose question it is: None for the session's own run, else the run of
+    # a helper it launched, which is where the answer has to go.
+    question_run: int | None = None
     last_assistant: str = ""
     title: str = ""
     loaded: bool = False
@@ -191,6 +198,16 @@ class SleipnirApp(App):
         self._pending_text: str | None = None
         self._delete_armed: tuple[str, float] | None = None
         self.auto_level = "off"
+        # The team. Helper agent id -> its short name; each helper run placed
+        # so far -> (the session that launched it, the helper's name).
+        self.helper_agents: dict[int, str] = {}
+        self.helper_runs: dict[int, tuple[int, str]] = {}
+        # Helper runs of sessions not open here, until the next poll.
+        self.foreign_runs: set[int] = set()
+        self.helper_sessions: list[dict] = []
+        # (helper run, question) already answered, so a poll that has not
+        # caught up yet does not ask it again.
+        self.answered: set[tuple[int, str]] = set()
 
     # -- layout -------------------------------------------------------------
 
@@ -266,6 +283,7 @@ class SleipnirApp(App):
             self.set_status(f"cannot reach Norns: {e}")
             return
 
+        sessions = await self._take_helpers(sessions)
         self.sessions = {s["id"]: s for s in sessions}
         self.spaces = self._group_spaces(sessions)
 
@@ -287,7 +305,7 @@ class SleipnirApp(App):
                         self._pending_text = None
                     break
 
-        waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
+        waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting" or s.get("helper_waiting"))
         thinking = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
         here = self.gard_names.get(self.gard_id, self.gard_id) if self.gard_id else "no gard"
         # The sidebar already counts spaces and their sessions; this says
@@ -301,6 +319,33 @@ class SleipnirApp(App):
         if waiting:
             state.insert(0, f"[yellow]{waiting} need you[/]")
         self.set_status("  ".join(state))
+
+    async def _take_helpers(self, sessions: list[dict]) -> list[dict]:
+        """A helper's conversation belongs to the session that launched it,
+        not to the tree: it leaves the list, and a helper waiting on you
+        marks the session it works for as needing you."""
+        self.foreign_runs.clear()
+        self.helper_sessions = [s for s in sessions if is_helper_session(s)]
+        for h in self.helper_sessions:
+            if h.get("agent_id") and h["agent_id"] not in self.helper_agents:
+                await self._join_helper(h["agent_id"], h.get("agent_name"))
+        waiting_for = {
+            (h.get("run") or {}).get("parent_run_id")
+            for h in self.helper_sessions
+            if (h.get("run") or {}).get("status") == "waiting"
+        }
+        out = []
+        for s in sessions:
+            if is_helper_session(s):
+                continue
+            run_id = (s.get("run") or {}).get("id")
+            out.append({**s, "helper_waiting": True} if run_id and run_id in waiting_for else s)
+        return out
+
+    async def _join_helper(self, agent_id: int, name) -> None:
+        self.helper_agents[agent_id] = helper_label(name)
+        if self.stream:
+            await self.stream.join(agent_id)
 
     def _space(self, gid: int) -> Space:
         """A space row, with the two facts the sidebar needs beyond its name."""
@@ -444,9 +489,12 @@ class SleipnirApp(App):
                 child.set_label(label)
 
     async def _learn_agents(self) -> None:
+        helpers = {f"{self.agent_name}-{role}" for role in HELPER_ROLES}
         for a in await self.api.agents():
             if a.get("name") == self.agent_name:
                 self.agent_id = a["id"]
+            elif a.get("name") in helpers and a["id"] not in self.helper_agents:
+                await self._join_helper(a["id"], a["name"])
 
     async def _learn_gards(self) -> None:
         try:
@@ -584,10 +632,14 @@ class SleipnirApp(App):
             if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
                 if tab.question != run["waiting_for"]["question"]:
                     tab.question = run["waiting_for"]["question"]
+                    tab.question_run = None
                     if tab.loaded:
                         self.log_lines(tab, event_lines("waiting_for_user", {"question": tab.question}, tab.permissions))
-            elif run.get("status") != "waiting":
+            elif run.get("status") != "waiting" and tab.question_run is None:
+                # The session's own run is working, which is exactly when a
+                # helper it launched may be the one asking.
                 tab.question = None
+            self._sync_helper_question(tab)
 
         # Nothing on screen: open the newest session of the current space,
         # so a fresh client lands somewhere useful rather than on a blank.
@@ -597,6 +649,31 @@ class SleipnirApp(App):
                 key = await self.open_pane_for(space.sessions[0])
                 self._set_active_pane(key)
         await self._ensure_loaded(self.active_pane)
+
+    def _sync_helper_question(self, tab: Tab) -> None:
+        """A helper of this session waiting on you, as the poll sees it — for
+        when its live event never reached us. The poll only adds a question;
+        answering it, or the helper's next event, takes it away."""
+        if tab.question:
+            return
+        for h in self.helper_sessions:
+            run = h.get("run") or {}
+            question = (run.get("waiting_for") or {}).get("question")
+            if run.get("status") != "waiting" or not question or not run.get("id") or (run["id"], question) in self.answered:
+                continue
+            parent = run.get("parent_run_id")
+            placed = self.helper_runs.get(run["id"])
+            if placed is None and parent in self.helper_runs:
+                placed = (self.helper_runs[parent][0], helper_label(h.get("agent_name")))
+            if placed is None and parent and parent == tab.run_id:
+                placed = (tab.session_id, helper_label(h.get("agent_name")))
+            if placed is None or placed[0] != tab.session_id:
+                continue
+            self.helper_runs[run["id"]] = placed
+            tab.question, tab.question_run = question, run["id"]
+            if tab.loaded:
+                self.log_lines(tab, helper_event_lines(placed[1], "waiting_for_user", {"question": question}, tab.permissions))
+            return
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         if isinstance(event.node.data, dict) and "session_id" not in event.node.data:
@@ -664,6 +741,12 @@ class SleipnirApp(App):
             self.log_lines(tab, ended_lines(run))
         if run.get("status") == "waiting" and (run.get("waiting_for") or {}).get("question"):
             tab.question = run["waiting_for"]["question"]
+            tab.question_run = None
+        elif tab.question and tab.question_run in self.helper_runs:
+            # A helper asked before this history was on screen: nothing in the
+            # session's own record holds its question, so say it again here.
+            label = self.helper_runs[tab.question_run][1]
+            self.log_lines(tab, helper_event_lines(label, "waiting_for_user", {"question": tab.question}, tab.permissions))
         self._update_prompt()
 
     def _ending(self, run_id: int, outcomes: dict, row_run: dict) -> list:
@@ -690,6 +773,39 @@ class SleipnirApp(App):
                 payload = e.get("payload") or {}
                 self._learn_permission(tab, payload.get("name"), payload.get("content"))
         self.log_lines(tab, run_event_lines(events, tab.permissions, run_id=run.get("id")))
+        await self._adopt_helpers(tab, events)
+
+    async def _adopt_helpers(self, tab: Tab, events: list[dict]) -> None:
+        """The helpers a run in flight has launched, placed under its session
+        so their live events land there — and one already waiting on you
+        asks again, since its question was asked before we were looking."""
+        for e in events:
+            if e.get("event_type") != "subagent_launched":
+                continue
+            payload = e.get("payload") or {}
+            try:
+                child = int(payload.get("child_run_id"))
+            except (TypeError, ValueError):
+                continue
+            label = helper_label(payload.get("child_agent_name"))
+            self.helper_runs[child] = (tab.session_id, label)
+            try:
+                run = await self.api.run(child)
+            except Exception:
+                continue
+            if run.get("agent_id") and run["agent_id"] not in self.helper_agents:
+                await self._join_helper(run["agent_id"], payload.get("child_agent_name"))
+            question = (run.get("waiting_for") or {}).get("question")
+            if run.get("status") != "waiting" or not question or tab.question:
+                continue
+            try:
+                for ce in await self.api.run_events(child):
+                    if ce.get("event_type") == "tool_result":
+                        self._learn_permission(tab, (ce.get("payload") or {}).get("name"), (ce.get("payload") or {}).get("content"))
+            except Exception:
+                pass
+            tab.question, tab.question_run = question, child
+            self.log_lines(tab, helper_event_lines(label, "waiting_for_user", {"question": question}, tab.permissions))
 
     def _learn_permission(self, tab: Tab, name, content) -> None:
         if name in ("bash", "write_file", "edit_file") and isinstance(content, str):
@@ -753,13 +869,21 @@ class SleipnirApp(App):
         if tab is None or not tab.question or not tab.run_id:
             return
         try:
-            await self.api.reply(tab.run_id, event.answer)
+            await self._answer(tab, event.answer)
         except ApiError as e:
             self.notify(e.message, severity="error")
             return
-        tab.question = None
         self._update_prompt()
         self.query_one("#prompt", Prompt).focus()
+
+    async def _answer(self, tab: Tab, answer: str) -> None:
+        """Send an answer to whichever run asked: the session's, or a helper's."""
+        run_id = tab.question_run or tab.run_id
+        await self.api.reply(run_id, answer)
+        if tab.question_run is not None:
+            self.answered.add((tab.question_run, tab.question or ""))
+        tab.question = None
+        tab.question_run = None
 
     def on_permission_prompt_type_reply(self, event: PermissionPrompt.TypeReply) -> None:
         self._focus_default()
@@ -769,6 +893,9 @@ class SleipnirApp(App):
     async def on_agent_event(self, agent_id: int, event: str, payload: dict) -> None:
         run_id = payload.get("run_id")
         tab = next((t for t in self.tabs.values() if t.run_id == run_id and t.agent_id == agent_id), None)
+        if tab is None and (agent_id in self.helper_agents or run_id in self.helper_runs):
+            await self.on_helper_event(agent_id, event, payload)
+            return
         if tab is None:
             self.refresh_sessions()
             return
@@ -776,8 +903,12 @@ class SleipnirApp(App):
             self._learn_permission(tab, payload.get("name"), text_of(payload.get("content")))
         if event == "waiting_for_user":
             tab.question = payload.get("question")
-        elif event in ("completed", "error") or (event == "tool_result" and payload.get("name") == "ask_human"):
+            tab.question_run = None
+        elif event in ("completed", "error") or (
+            event == "tool_result" and payload.get("name") == "ask_human" and tab.question_run is None
+        ):
             tab.question = None
+            tab.question_run = None
         if event == "llm_response":
             tab.last_assistant = text_of(payload.get("content")).strip()
         if event == "completed":
@@ -789,6 +920,56 @@ class SleipnirApp(App):
         self._update_prompt()
         if event in ("completed", "error", "waiting_for_user", "agent_started"):
             self.refresh_sessions()
+
+    async def on_helper_event(self, agent_id: int, event: str, payload: dict) -> None:
+        """A helper's event, shown in the session that launched it."""
+        run_id = payload.get("run_id")
+        placed = self.helper_runs.get(run_id)
+        if placed is None:
+            if not run_id or run_id in self.foreign_runs:
+                return
+            placed = await self._place_helper_run(run_id, agent_id)
+            if placed is None:
+                self.foreign_runs.add(run_id)
+                return
+        session_id, label = placed
+        tab = self.tabs.get(f"s{session_id}")
+        if tab is None:
+            return
+        if event == "tool_result":
+            self._learn_permission(tab, payload.get("name"), text_of(payload.get("content")))
+        if event == "waiting_for_user":
+            tab.question, tab.question_run = payload.get("question"), run_id
+        elif tab.question_run == run_id and (
+            event in ("completed", "error") or (event == "tool_result" and payload.get("name") == "ask_human")
+        ):
+            tab.question = tab.question_run = None
+        if tab.loaded:
+            self.log_lines(tab, helper_event_lines(label, event, payload, tab.permissions))
+        self._update_prompt()
+        if event in ("completed", "error", "waiting_for_user"):
+            self.refresh_sessions()
+
+    async def _place_helper_run(self, run_id: int, agent_id: int) -> tuple[int, str] | None:
+        """Which open session a helper run works for, by the run that
+        launched it — the session's own, or another helper's."""
+        try:
+            run = await self.api.run(run_id)
+        except Exception:
+            return None
+        parent = run.get("parent_run_id")
+        if not parent:
+            return None
+        label = self.helper_agents.get(agent_id) or helper_label(None)
+        if parent in self.helper_runs:
+            placed = (self.helper_runs[parent][0], label)
+        else:
+            tab = next((t for t in self.tabs.values() if t.run_id == parent and t.session_id), None)
+            if tab is None:
+                return None
+            placed = (tab.session_id, label)
+        self.helper_runs[run_id] = placed
+        return placed
 
     # -- input -------------------------------------------------------------
 
@@ -806,8 +987,7 @@ class SleipnirApp(App):
             return
         if tab.question and tab.run_id:
             try:
-                await self.api.reply(tab.run_id, expand_answer(text))
-                tab.question = None
+                await self._answer(tab, expand_answer(text))
                 self._update_prompt()
             except ApiError as e:
                 self.log_line(tab, f"[red]{e.message}[/red]")

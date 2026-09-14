@@ -22,6 +22,12 @@ DEFAULTS = {
     # One response's ceiling. A coding turn writes whole files, and a turn
     # that reaches the ceiling comes back cut off.
     "max_tokens": "32000",
+    # The team: the agent may hand reading to explorers and changes to one
+    # coder, or do the work itself. "off" leaves it working alone.
+    "team": "on",
+    # The models behind the team. Empty means the agent's own model.
+    "explore_model": "",
+    "code_model": "",
 }
 KEYS = tuple(DEFAULTS)
 
@@ -54,6 +60,8 @@ def set_value(root: Path, key: str, value: str) -> None:
         raise KeyError(f"unknown setting {key!r}; settings are: {', '.join(KEYS)}")
     if key in ("max_steps", "compact_at", "keep", "max_tokens") and not (value.isdigit() and int(value) > 0):
         raise ValueError(f"{key} must be a positive integer")
+    if key == "team" and value not in ("on", "off"):
+        raise ValueError("team must be on or off")
     values = load(root)
     values[key] = value
     save(root, values)

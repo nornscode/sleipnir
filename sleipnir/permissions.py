@@ -1,6 +1,6 @@
 """The allow list and the ask_human approval loop.
 
-Read-only tools (read_file, grep, glob) never ask; they are confined to
+Read-only tools (read_file, grep, glob, git) never ask; they are confined to
 the workspace root. A mutating tool (bash, write_file, edit_file) checks
 its subject, the command or the path, against the allow list. Outside
 the list it raises PermissionRequired carrying a one-time token. The
@@ -24,7 +24,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-READ_ONLY = {"read_file", "grep", "glob"}
+READ_ONLY = {"read_file", "grep", "glob", "git"}
 # Actions no rule can cover: reconfiguring the harness itself.
 HARNESS_DIR = ".sleipnir"
 SELF_CONFIG_SUBCOMMANDS = {"allow", "config"}

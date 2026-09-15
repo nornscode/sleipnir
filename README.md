@@ -61,15 +61,29 @@ asks a question, your next line is the answer.
 
 ```
 /new              start a new session in this space (ctrl+n)
-/spaces           every space, with whether a worker is in it
-/close            close the current tab (ctrl+w); the session lives on
-/delete           delete the current session from Norns (asks once)
-/close-space      close this space everywhere (ctrl+g): destroy its gard,
-                  stop its worker on every machine (`force` if busy)
 /fork N [message] fork the current session from step N into a new one
+/spaces           every space, with whether a worker is in it
 /resume           reload the current session and re-attach to its run
-/help             the commands
-/quit             leave; the worker stops with you, sessions live on in Norns
+/close            hide this session from the tree (ctrl+w); it comes back
+/auto [edits|all|off] stop being asked about every command. edits lets
+                  file changes through, all lets commands through too;
+                  changing the harness itself always asks
+/image <path> [text] hand the agent a picture — a screenshot from
+                  anywhere on this machine, not just the repository
+/rename <name>    name this session; empty puts the guessed name back
+/archive          put this session away: the tab goes and stays gone,
+                  but nothing is deleted
+/archived         the sessions you have put away
+/restore N        take one back out of the archive and open it
+/delete           delete the current session from Norns (asks once)
+/start            start a worker for this space, if its checkout is here
+                  (sending into a space with no worker does this too)
+/close-space      close this space everywhere (ctrl+g): destroys its
+                  gard and stops its worker on every machine
+                  (`force` if busy)
+/help             this text
+/quit             stop looking (ctrl+q). The worker keeps this space
+                  open; `sleip stop` closes it in this checkout
 ```
 
 Sessions survive the client: close it, open it on another machine, and
@@ -150,8 +164,8 @@ space. The gard's
 claim token is kept in `~/.sleipnir/gards.json`, never in the
 repository. `/close-space`, or ctrl+g, closes one again: it destroys the gard, so
 Norns stops that gard's worker wherever it is running and the space
-leaves every client's sidebar. `/quit` does not — it stops the worker in
-front of you and leaves the space for next time. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
+leaves every client's sidebar. `/quit` does not — the worker keeps this
+space open, and `sleip stop` closes it in this checkout. `NORNS_GARD` and `NORNS_GARD_CLAIM_TOKEN` override it, and
 `--no-gard` turns it off, in which case the worker serves any run that
 has no gard.
 
@@ -231,7 +245,7 @@ through `bash`:
 ```bash
 sleip setup       # the keys, stored for every space (--force to re-ask)
 sleip allow list | add <tool> <pattern> | remove <tool> <pattern>
-sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep, team, explore_model, code_model
+sleip config show | set <key> <value> | unset <key>   # agent, model, max_steps, compact_at, keep, max_tokens, team, explore_model, code_model
 sleip doctor      # connection, keys, gard, allow list
 sleip docs        # the reference the agent reads
 sleip help        # the commands, in brief

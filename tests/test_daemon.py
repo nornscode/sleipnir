@@ -41,3 +41,25 @@ def test_a_dead_worker_serves_nothing(tmp_path):
 def test_nothing_running_here(tmp_path):
     assert daemon.running(tmp_path) is None
     assert daemon.serving_url(tmp_path) is None
+
+
+def test_a_worker_that_exited_is_not_alive_before_it_is_collected():
+    """What a client that started a worker sees after stopping it: a zombie,
+    which still answers signals. Waiting for it to "stop" waited forever."""
+    import subprocess
+    import time
+
+    child = subprocess.Popen(["true"])
+    deadline = time.time() + 5
+    while time.time() < deadline and not daemon.zombie(child.pid):
+        time.sleep(0.05)
+    try:
+        assert daemon.zombie(child.pid)
+        assert not daemon.alive(child.pid)
+    finally:
+        child.wait()
+
+
+def test_a_running_process_is_alive():
+    assert daemon.alive(os.getpid())
+    assert not daemon.zombie(os.getpid())

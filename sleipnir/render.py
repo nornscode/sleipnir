@@ -115,7 +115,7 @@ def space_row(name: str, sessions: list[dict], status: str | None = None, *, her
         # is on this machine, and saying so is what stops a fruitless /start.
         remedy = "— /start" if here else "· elsewhere"
         return f"{SPACE_ICON} [b red]{escape(name)}[/] [red]no worker {remedy}[/]"
-    waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting")
+    waiting = sum(1 for s in sessions if (s.get("run") or {}).get("status") == "waiting" or s.get("helper_waiting"))
     working = sum(1 for s in sessions if s.get("status") in ("running", "awaiting_llm", "awaiting_tools"))
     if waiting:
         return f"{SPACE_ICON} [b]{escape(name)}[/b] [yellow]{waiting} need you[/]"
@@ -137,7 +137,7 @@ def session_row(session: dict, width: int = 24) -> str:
     is doing right now."""
     status = session.get("status") or "stopped"
     run = session.get("run") or {}
-    if status in ("stopped", "idle") and run.get("status") == "waiting":
+    if (status in ("stopped", "idle") and run.get("status") == "waiting") or session.get("helper_waiting"):
         status = "waiting"
     title = title_of(session)
     if len(title) > width:
@@ -206,7 +206,9 @@ def tool_summary(name: str, arguments: Any) -> str:
     if name == "ask_human":
         return text_of(args.get("question"))
     if name == "launch_agent":
-        return text_of(args.get("agent_name") or args.get("agent"))
+        who = helper_label(args.get("agent_name") or args.get("agent"))
+        what = first_line(text_of(args.get("message")), 80)
+        return f"{who}: {what}" if what else who
     return text_of(args) if args else ""
 
 
@@ -334,7 +336,7 @@ def tool_result_lines(name: str, content: str, kind: str | None = None, is_error
         return ["", f"[b green]›[/] {escape(first_line(content))}"]
     if permission_request(content):
         return []
-    if kind:
+    if kind and not content.strip():
         return [f"  [dim]↳ {escape(kind)}[/dim]"]
     if not is_error and name in ("edit_file", "write_file"):
         head, body = diff.split(content)
@@ -456,4 +458,46 @@ def event_lines(event: str, payload: dict, known: dict[str, tuple[str, str]] | N
         return [f"[dim]… compacted {payload.get('dropped')} messages into the summary[/dim]"]
     if event == "agent_resumed":
         return [f"[dim]— resumed —[/dim]"]
+    return []
+
+
+# The team. A helper is an agent the session's agent launched: an explorer
+# or the coder. Its conversation is part of the session, not one of its own.
+HELPER_ROLES = ("explore", "code")
+
+
+def helper_label(name) -> str:
+    """A helper's short name: sleipnir-explore is "explore"."""
+    name = text_of(name)
+    base, _, role = name.rpartition("-")
+    return role if base and role in HELPER_ROLES else (name or "helper")
+
+
+def is_helper_session(session: dict) -> bool:
+    """Norns keys every launched agent's conversation subagent…"""
+    return text_of(session.get("key")).startswith("subagent")
+
+
+def helper_event_lines(label: str, event: str, payload: dict, known: dict[str, tuple[str, str]] | None = None) -> list:
+    """A helper's work, in the session that launched it: each tool call
+    marked with who made it, each result on a line, a change in full, and
+    a question to you as a question. Its prose is left out — what it
+    concluded comes back as the launch's own result."""
+    who = f"[magenta]{escape(label)}[/magenta]"
+    if event == "agent_started":
+        return [with_link(f"  {who} [dim]started[/dim]", payload.get("run_id"))]
+    if event == "llm_response":
+        calls = [tc for tc in payload.get("tool_calls") or [] if tc.get("name") != "ask_human"]
+        return [f"  {who} {line}" for line in tool_call_lines(calls)]
+    if event == "tool_result":
+        # Marked like its call: a change shown in full is otherwise nobody's.
+        lines = tool_result_lines(payload.get("name", ""), text_of(payload.get("content")), None, bool(payload.get("is_error")))
+        marked = next((i for i, line in enumerate(lines) if line), None)
+        return [f"  {who} {line.lstrip()}" if i == marked else (f"  {line}" if line else line) for i, line in enumerate(lines)]
+    if event == "waiting_for_user":
+        return ["", f"{who} [yellow]asks you[/yellow]"] + question_lines(text_of(payload.get("question")), known)[1:]
+    if event == "completed":
+        return [with_link(f"  {who} [green]✓ done[/green]", payload.get("run_id"))]
+    if event == "error":
+        return [with_link(f"  {who} [red]✗ {escape(text_of(payload.get('error')))}[/red]", payload.get("run_id"))]
     return []

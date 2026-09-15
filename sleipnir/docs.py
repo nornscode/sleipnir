@@ -112,6 +112,10 @@ worker started it.
   regex search; output is path:line:text. Never needs permission.
 - glob(pattern, path="."): files by name, e.g. "**/*.ex". Never needs
   permission.
+- git(args): read history, e.g. "log --oneline -20 -- lib/x.ex" or
+  "blame -L 40,60 lib/x.ex". Only log, show, diff, blame, status,
+  ls-files, grep, rev-parse, shortlog and describe; use bash for git
+  commands that write. Never needs permission.
 - edit_file(path, old_string, new_string, replace_all=false, approval=""):
   replace one exact block; whitespace-only indent differences are
   tolerated; ambiguous matches fail with line numbers. The result is the
@@ -164,6 +168,11 @@ That is the whole surface; there is nothing else to discover.
                     holds the terminal instead, which is what a container wants
     sleip chat      the client alone, without a worker
     sleip stop      stop this checkout's worker
+    sleip workers   every worker on this machine, with whether Norns has it
+                    and whether it runs older code; `sleip workers stop` or
+                    `restart` with a pid, checkout name or path, --all or
+                    --stale. Stopping workers always asks: the worker you
+                    are running in is one of them
     sleip allow     the allow list, above
     sleip config    settings, below
     sleip setup     ask for the keys and store them for every space
@@ -204,6 +213,33 @@ file in one go is what usually does it. Carry on where it stopped, or
 raise the ceiling with `sleip config set max_tokens <n>` and restart the
 worker.
 
+## The team
+
+With `team` on (the default) this worker serves three agents: you,
+`<agent>-explore` and `<agent>-code`. You launch the other two with
+launch_agent, and nothing else can. Deciding per task is yours: do small
+work yourself, delegate reading that would flood your context or an
+implementation long enough to be worth checking from outside.
+
+- An explorer gets read_file, grep, glob and git, and nothing it is
+  offered writes. It has not seen your conversation, so its message has
+  to carry the question whole. Several can run at once.
+- The coder gets every tool, and there is one per session: its
+  conversation is reused, so it remembers earlier assignments, and a
+  launch while it is still working comes back as busy instead of
+  starting a second writer. Do not edit or run commands yourself in a
+  turn it is working in.
+- What each may do is fixed by the worker and enforced by Norns. You
+  decide who does a piece of work, never what they are allowed to do.
+- Their changes go through the same allow list, and they ask the user
+  for permission themselves; the question shows in this session, marked
+  with the helper's name. Never answer one for the user.
+- Their conversations are not sessions. The client shows their tool
+  calls, changes and questions inside the session that launched them.
+- `sleip config set team off` makes you work alone. `explore_model` and
+  `code_model` choose their models; empty means yours. Both take effect
+  when the worker restarts.
+
 ## Configuring the harness
 
 Run these through bash from the repository root:
@@ -212,7 +248,8 @@ Run these through bash from the repository root:
 - sleip config show | set <key> <value> | unset <key>
   keys: agent (name in Norns), model, max_steps, compact_at (input
   tokens at which the history is folded into a summary), keep (messages
-  kept verbatim after that), max_tokens (the ceiling on one response)
+  kept verbatim after that), max_tokens (the ceiling on one response),
+  team (on or off), explore_model and code_model (empty: the agent's own)
 - sleip doctor: checks the connection, keys, and config
 - sleip docs: this text
 

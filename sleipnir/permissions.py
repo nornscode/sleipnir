@@ -1,6 +1,6 @@
 """The allow list and the ask_human approval loop.
 
-Read-only tools (read_file, grep, glob) never ask; they are confined to
+Read-only tools (read_file, grep, glob, git) never ask; they are confined to
 the workspace root. A mutating tool (bash, write_file, edit_file) checks
 its subject, the command or the path, against the allow list. Outside
 the list it raises PermissionRequired carrying a one-time token. The
@@ -24,7 +24,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-READ_ONLY = {"read_file", "grep", "glob"}
+READ_ONLY = {"read_file", "grep", "glob", "git"}
 # Actions no rule can cover: reconfiguring the harness itself.
 HARNESS_DIR = ".sleipnir"
 SELF_CONFIG_SUBCOMMANDS = {"allow", "config"}
@@ -108,6 +108,12 @@ def always_asks(tool: str, subject: str) -> bool:
         for seg in shell_segments(subject):
             words = seg.split()
             if len(words) >= 2 and words[0] in COMMAND_NAMES and words[1] in SELF_CONFIG_SUBCOMMANDS:
+                return True
+            # Stopping workers from inside one can stop the worker running
+            # the command, halfway through the call that asked for it.
+            if len(words) >= 2 and words[0] in COMMAND_NAMES and (
+                words[1] == "stop" or (words[1] == "workers" and len(words) >= 3 and words[2] in ("stop", "restart"))
+            ):
                 return True
         return False
     return subject == HARNESS_DIR or subject.startswith(HARNESS_DIR + "/")

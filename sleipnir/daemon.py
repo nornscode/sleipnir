@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -36,7 +37,18 @@ def alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True  # someone else's, but running
-    return True
+    return not zombie(pid)
+
+
+def zombie(pid: int) -> bool:
+    """Exited, but not yet collected by whatever started it. A worker the
+    client started, then stopped, stays like this for as long as the client
+    runs: it answers signals, and it is gone in every way that matters."""
+    try:
+        stat = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return stat.strip().startswith("Z")
 
 
 def _read_pid_file(root: Path) -> tuple[int, str | None] | None:
@@ -78,11 +90,14 @@ def serving_url(root: Path) -> str | None:
     return url if alive(pid) else None
 
 
-def start(root: Path, argv_extra: list[str] | None = None, url: str | None = None) -> tuple[int | None, str]:
+def start(
+    root: Path, argv_extra: list[str] | None = None, url: str | None = None, env: dict[str, str] | None = None
+) -> tuple[int | None, str]:
     """Start the worker detached, unless one is already serving this root.
 
     Returns (pid, message). The child is `sleip serve --foreground` in a
     session of its own, so closing this terminal does not take it down.
+    `env` is its environment, this process's when None.
     """
     existing = running(root)
     if existing:
@@ -100,9 +115,13 @@ def start(root: Path, argv_extra: list[str] | None = None, url: str | None = Non
             stderr=handle,
             start_new_session=True,  # survives this terminal
             cwd=str(root),
+            env=env,
         )
     finally:
         handle.close()
+    # Collect it when it exits. A client that started a worker outlives it,
+    # and an uncollected child lingers as a zombie that still looks alive.
+    threading.Thread(target=child.wait, name=f"reap-{child.pid}", daemon=True).start()
 
     # A worker that cannot connect dies in the first second; say so now
     # rather than leaving a pid file pointing at nothing.
@@ -120,16 +139,24 @@ def stop(root: Path, timeout: float = 15.0) -> str:
     pid = running(root)
     if pid is None:
         return "no worker running for this checkout"
+    stopped, message = stop_pid(pid, timeout)
+    if stopped:
+        pid_path(root).unlink(missing_ok=True)
+    return message
 
+
+def stop_pid(pid: int, timeout: float = 15.0) -> tuple[bool, str]:
+    """Ask a worker to drain and stop, and wait for it to go."""
     try:
         os.kill(pid, signal.SIGTERM)  # the SDK drains on SIGTERM
+    except ProcessLookupError:
+        return True, f"worker stopped (pid {pid})"
     except OSError as e:
-        return f"could not signal the worker (pid {pid}): {e}"
+        return False, f"could not signal the worker (pid {pid}): {e}"
 
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not alive(pid):
-            pid_path(root).unlink(missing_ok=True)
-            return f"worker stopped (pid {pid})"
+            return True, f"worker stopped (pid {pid})"
         time.sleep(0.2)
-    return f"worker (pid {pid}) is still draining; it will stop on its own"
+    return False, f"worker (pid {pid}) is still draining; it will stop on its own"

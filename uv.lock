@@ -1116,16 +1116,16 @@ wheels = [
 
 [[package]]
 name = "norns-sdk"
-version = "0.8.0"
+version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "litellm" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/31/74/8fca5534a7d20ea1088636971d14728171cd18fdfdeae47190163a0f8b69/norns_sdk-0.8.0.tar.gz", hash = "sha256:3f51c65c0494c86e3ef0d57321353d88af7e93f55f6a3ca33ddcbc36e203923c", size = 195483, upload-time = "2026-09-13T17:23:08.605Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/47/c90a2fe08f36ab86063e05c83ff4b363e1c778957de57b840e7169782b2f/norns_sdk-0.8.2.tar.gz", hash = "sha256:1822e3812dcc8d4f73d6bb0f86a2b307daaef2167bfd50178d39dd3d993ffd89", size = 202194, upload-time = "2026-10-04T06:04:03.972Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/81/2d106109f090b5e8098a1f31dd3bba72aa3e04ea317ab1fa38885105dd59/norns_sdk-0.8.0-py3-none-any.whl", hash = "sha256:998427f86846fcba6bb783ee6c13b4ee3765ebe025ec9511e3bf6d0cf776b587", size = 21316, upload-time = "2026-09-13T17:23:07.359Z" },
+    { url = "https://files.pythonhosted.org/packages/98/00/48aff6109ffb4223c3fe06fad6b25917bfb6d1325d4ab2df2f695d3b12ff/norns_sdk-0.8.2-py3-none-any.whl", hash = "sha256:d451fa7192747a636493754079a9da9fd9d23b6373edfb15db26ab4c7d81ca6b", size = 25357, upload-time = "2026-10-04T06:04:02.718Z" },
 ]
 
 [[package]]
@@ -1853,7 +1853,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "norns-sdk", specifier = ">=0.8.0" },
+    { name = "norns-sdk", specifier = ">=0.8.2" },
     { name = "textual", specifier = ">=8.0" },
 ]
 

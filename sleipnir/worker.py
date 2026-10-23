@@ -52,7 +52,6 @@ def build_agents(settings: dict[str, str]) -> list[Agent]:
             system_prompt=prompt,
             tools=tools,
             allowed_tools=[t.name for t in tools],
-            mode="conversation",
             checkpoint_policy="on_tool_call",
             # A coding session is one long tool loop. No sliding window: Norns
             # compacts the history into a summary once a response reports

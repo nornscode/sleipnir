@@ -1,5 +1,7 @@
 # Sleipnir
 
+> **Archived (2026-11-25).** Superseded by [egdir](https://github.com/nornscode/egdir) for day-to-day coding. Kept read-only as a reference for a Norns-native coding loop: the loop runs in Norns, the tools on the worker.
+
 A coding harness worker for [Norns](https://github.com/nornscode/norns).
 It runs on your machine, in your repository, and gives a Norns agent six
 tools: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, and
